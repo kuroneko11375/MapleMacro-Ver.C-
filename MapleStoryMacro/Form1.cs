@@ -105,6 +105,103 @@ private const uint WM_KEYUP = 0x0101;
   private const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
         private const uint KEYEVENTF_SCANCODE = 0x0008;
 
+ // 按鍵顯示名稱映射表
+        private static readonly Dictionary<Keys, string> KeyDisplayNames = new Dictionary<Keys, string>
+        {
+            // 符號鍵 - Shift 時會變成 <> 等符號
+  { Keys.OemPeriod, ". (>)" },      // . 和 >
+      { Keys.Oemcomma, ", (<)" },       // , 和 <
+            { Keys.OemQuestion, "/ (?)" },  // / 和 ?
+     { Keys.OemSemicolon, "; (:)" },   // ; 和 :
+            { Keys.OemQuotes, "' (\")" },     // ' 和 "
+            { Keys.OemOpenBrackets, "[ ({)" }, // [ 和 {
+            { Keys.OemCloseBrackets, "] (})" }, // ] 和 }
+      { Keys.OemBackslash, "\\ (|)" },  // \ 和 |
+ { Keys.OemMinus, "- (_)" },    // - 和 _
+{ Keys.Oemplus, "= (+)" },        // = 和 +
+    { Keys.Oemtilde, "` (~)" },     // ` 和 ~
+            { Keys.OemPipe, "\\ (|)" },       // \ 和 |
+            // 常用功能鍵
+ { Keys.Space, "空白鍵" },
+            { Keys.Enter, "Enter" },
+  { Keys.Escape, "Esc" },
+        { Keys.Tab, "Tab" },
+      { Keys.Back, "Backspace" },
+    { Keys.Delete, "Delete" },
+    { Keys.Insert, "Insert" },
+            { Keys.Home, "Home" },
+            { Keys.End, "End" },
+            { Keys.PageUp, "Page Up" },
+       { Keys.PageDown, "Page Down" },
+ // 方向鍵
+            { Keys.Left, "← 左" },
+       { Keys.Right, "→ 右" },
+        { Keys.Up, "↑ 上" },
+            { Keys.Down, "↓ 下" },
+  // 修飾鍵
+        { Keys.LShiftKey, "左 Shift" },
+     { Keys.RShiftKey, "右 Shift" },
+            { Keys.ShiftKey, "Shift" },
+            { Keys.LControlKey, "左 Ctrl" },
+          { Keys.RControlKey, "右 Ctrl" },
+       { Keys.ControlKey, "Ctrl" },
+ { Keys.LMenu, "左 Alt" },
+  { Keys.RMenu, "右 Alt" },
+    { Keys.Menu, "Alt" },
+     { Keys.Alt, "Alt" },
+       { Keys.LWin, "左 Win" },
+            { Keys.RWin, "右 Win" },
+            // 數字鍵盤
+            { Keys.NumPad0, "Num 0" },
+       { Keys.NumPad1, "Num 1" },
+      { Keys.NumPad2, "Num 2" },
+        { Keys.NumPad3, "Num 3" },
+         { Keys.NumPad4, "Num 4" },
+  { Keys.NumPad5, "Num 5" },
+            { Keys.NumPad6, "Num 6" },
+         { Keys.NumPad7, "Num 7" },
+            { Keys.NumPad8, "Num 8" },
+         { Keys.NumPad9, "Num 9" },
+            { Keys.Multiply, "Num *" },
+ { Keys.Add, "Num +" },
+       { Keys.Subtract, "Num -" },
+            { Keys.Decimal, "Num ." },
+            { Keys.Divide, "Num /" },
+            { Keys.NumLock, "Num Lock" },
+            // 其他
+ { Keys.CapsLock, "Caps Lock" },
+            { Keys.PrintScreen, "Print Screen" },
+            { Keys.Scroll, "Scroll Lock" },
+            { Keys.Pause, "Pause" },
+   };
+
+      /// <summary>
+  /// 取得按鍵的顯示名稱（更直觀的中文名稱）
+        /// </summary>
+        private static string GetKeyDisplayName(Keys key)
+        {
+            if (KeyDisplayNames.TryGetValue(key, out string displayName))
+      return displayName;
+            return key.ToString();
+        }
+
+        /// <summary>
+   /// 從顯示名稱還原為 Keys 列舉值
+    /// </summary>
+        private static Keys ParseKeyFromDisplay(string displayName)
+  {
+// 先嘗試從映射表反向查找
+      foreach (var kvp in KeyDisplayNames)
+            {
+  if (kvp.Value == displayName)
+      return kvp.Key;
+            }
+        // 如果找不到，嘗試直接解析
+        if (Enum.TryParse<Keys>(displayName, out Keys result))
+         return result;
+            throw new ArgumentException($"無法識別的按鍵名稱: {displayName}");
+    }
+
         public Form1()
         {
             InitializeComponent();
@@ -516,37 +613,39 @@ AddLog("All events cleared");
         {
          if (recordedEvents.Count == 0)
        {
-                MessageBox.Show("No events to display");
-        AddLog("No events to view");
+                MessageBox.Show("沒有事件可顯示");
+        AddLog("沒有事件可檢視");
          return;
       }
 
      Form eventViewer = new Form
-        {
- Text = "View Events",
-           Width = 700,
-      Height = 500,
+    {
+ Text = "檢視事件",
+    Width = 700,
+   Height = 500,
    StartPosition = FormStartPosition.CenterParent,
          Owner = this
    };
 
-          DataGridView dgv = new DataGridView
+   DataGridView dgv = new DataGridView
           {
     Dock = DockStyle.Fill,
            ReadOnly = true
         };
 
-            dgv.Columns.Add("KeyCode", "Key");
-    dgv.Columns.Add("EventType", "Type");
-      dgv.Columns.Add("Timestamp", "Time (sec)");
+     dgv.Columns.Add("KeyCode", "按鍵");
+    dgv.Columns.Add("EventType", "類型");
+ dgv.Columns.Add("Timestamp", "時間 (秒)");
 
-            foreach (MacroEvent evt in recordedEvents)
-            {
-  dgv.Rows.Add(evt.KeyCode.ToString(), evt.EventType, evt.Timestamp.ToString("F3"));
-    }
+      foreach (MacroEvent evt in recordedEvents)
+         {
+  string keyName = GetKeyDisplayName(evt.KeyCode);
+  string eventType = evt.EventType == "down" ? "按下" : "放開";
+  dgv.Rows.Add(keyName, eventType, evt.Timestamp.ToString("F3"));
+  }
 
             eventViewer.Controls.Add(dgv);
-        AddLog($"Viewing {recordedEvents.Count} events");
+      AddLog($"正在檢視 {recordedEvents.Count} 個事件");
       eventViewer.ShowDialog();
         }
 
@@ -554,21 +653,21 @@ AddLog("All events cleared");
         {
        if (recordedEvents.Count == 0)
         {
-           MessageBox.Show("No events to edit");
-      AddLog("No events to edit");
+           MessageBox.Show("沒有事件可編輯");
+      AddLog("沒有事件可編輯");
    return;
             }
 
-            AddLog("Opening editor...");
+   AddLog("正在開啟編輯器...");
 
       Form editorForm = new Form
-            {
-   Text = "Edit Script",
-             Width = 800,
+  {
+   Text = "編輯腳本",
+     Width = 800,
         Height = 600,
             StartPosition = FormStartPosition.CenterParent,
-          Owner = this
-            };
+     Owner = this
+         };
 
        DataGridView dgv = new DataGridView
    {
@@ -579,66 +678,101 @@ AddLog("All events cleared");
        AllowUserToAddRows = true,
         AllowUserToDeleteRows = true,
      AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.AllCells
-         };
+     };
 
-      dgv.Columns.Add("KeyCode", "Key");
-  dgv.Columns.Add("EventType", "Type");
-            dgv.Columns.Add("Timestamp", "Time (sec)");
+      // 建立按鍵下拉選單欄位
+DataGridViewComboBoxColumn keyColumn = new DataGridViewComboBoxColumn
+      {
+    Name = "KeyCode",
+ HeaderText = "按鍵",
+  Width = 150
+     };
+        // 添加所有可用的按鍵選項
+  foreach (var kvp in KeyDisplayNames)
+        {
+         keyColumn.Items.Add(kvp.Value);
+        }
+        // 也添加常用的字母和數字鍵
+  for (char c = 'A'; c <= 'Z'; c++)
+      keyColumn.Items.Add(c.ToString());
+        for (char c = '0'; c <= '9'; c++)
+      keyColumn.Items.Add(c.ToString());
+        // 添加 F1-F12
+       for (int i = 1; i <= 12; i++)
+     keyColumn.Items.Add($"F{i}");
+        dgv.Columns.Add(keyColumn);
 
-            foreach (MacroEvent evt in recordedEvents)
-            {
-  dgv.Rows.Add(evt.KeyCode.ToString(), evt.EventType, evt.Timestamp.ToString("F3"));
-         }
+        // 建立類型下拉選單欄位
+    DataGridViewComboBoxColumn typeColumn = new DataGridViewComboBoxColumn
+        {
+       Name = "EventType",
+ HeaderText = "類型",
+ Width = 80
+ };
+   typeColumn.Items.Add("按下");
+        typeColumn.Items.Add("放開");
+        dgv.Columns.Add(typeColumn);
 
-       Panel btnPanel = new Panel
+        dgv.Columns.Add("Timestamp", "時間 (秒)");
+
+    foreach (MacroEvent evt in recordedEvents)
+ {
+     string keyName = GetKeyDisplayName(evt.KeyCode);
+        string eventType = evt.EventType == "down" ? "按下" : "放開";
+  dgv.Rows.Add(keyName, eventType, evt.Timestamp.ToString("F3"));
+       }
+
+  Panel btnPanel = new Panel
           {
  Top = 500,
         Left = 10,
 Width = 760,
    Height = 50,
-         BorderStyle = BorderStyle.FixedSingle
-      };
+ BorderStyle = BorderStyle.FixedSingle
+   };
 
-Button saveBtn = new Button { Text = "Save", Width = 100, Height = 30, Left = 10, Top = 10 };
-Button cancelBtn = new Button { Text = "Cancel", Width = 100, Height = 30, Left = 120, Top = 10 };
+Button saveBtn = new Button { Text = "儲存", Width = 100, Height = 30, Left = 10, Top = 10 };
+Button cancelBtn = new Button { Text = "取消", Width = 100, Height = 30, Left = 120, Top = 10 };
 
        saveBtn.Click += (s, args) =>
-            {
-                try
+     {
+              try
    {
      recordedEvents.Clear();
-         foreach (DataGridViewRow row in dgv.Rows)
+    foreach (DataGridViewRow row in dgv.Rows)
       {
-          if (row.Cells[0].Value != null)
+     if (row.Cells[0].Value != null)
        {
-           Keys keyCode = (Keys)Enum.Parse(typeof(Keys), row.Cells[0].Value.ToString());
-    string eventType = row.Cells[1].Value.ToString();
-                double timestamp = double.Parse(row.Cells[2].Value.ToString());
+           string keyDisplayName = row.Cells[0].Value.ToString();
+       Keys keyCode = ParseKeyFromDisplay(keyDisplayName);
+    string eventTypeDisplay = row.Cells[1].Value.ToString();
+      string eventType = eventTypeDisplay == "按下" ? "down" : "up";
+           double timestamp = double.Parse(row.Cells[2].Value.ToString());
 
         recordedEvents.Add(new MacroEvent
  {
         KeyCode = keyCode,
          EventType = eventType,
         Timestamp = timestamp
-             });
+       });
     }
       }
 
-         lblRecordingStatus.Text = $"Edited | Events: {recordedEvents.Count}";
-       AddLog($"Saved edits - {recordedEvents.Count} events");
-    MessageBox.Show("Changes saved");
+   lblRecordingStatus.Text = $"已編輯 | 事件數: {recordedEvents.Count}";
+       AddLog($"已儲存編輯 - {recordedEvents.Count} 個事件");
+    MessageBox.Show("變更已儲存");
         editorForm.Close();
-       }
-      catch (Exception ex)
+     }
+ catch (Exception ex)
           {
-      AddLog($"Save failed: {ex.Message}");
-          MessageBox.Show($"Save failed: {ex.Message}");
+      AddLog($"儲存失敗: {ex.Message}");
+       MessageBox.Show($"儲存失敗: {ex.Message}");
            }
-      };
+};
 
   cancelBtn.Click += (s, args) => editorForm.Close();
 
-            btnPanel.Controls.Add(saveBtn);
+btnPanel.Controls.Add(saveBtn);
             btnPanel.Controls.Add(cancelBtn);
 
       editorForm.Controls.Add(dgv);
