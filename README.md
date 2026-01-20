@@ -30,7 +30,7 @@
 ## 🛠️ 環境需求
 
 * **作業系統：** Windows 10 / 11
-* **執行架構：** .NET Framework 4.7.2 或 .NET 6+ (Windows Forms)
+* **執行架構：** [.NET Framework 8+](https://builds.dotnet.microsoft.com/dotnet/Runtime/8.0.23/dotnet-runtime-8.0.23-win-x64.exe)
 * **權限要求：** **必須以系統管理員身分執行**（否則無法攔截與發送高權限視窗的按鍵訊息）。
 
 ## ⚠️ 需要注意 (Important)
