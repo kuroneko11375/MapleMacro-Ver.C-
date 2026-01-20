@@ -2,7 +2,7 @@
 
 **作者：** SchwarzeKatze_R
 
-**版本：** 1.0.0
+**版本：** 1.0.1
 
 **開發語言：** C# (.NET WinForms)
 
