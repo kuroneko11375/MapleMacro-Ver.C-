@@ -1,4 +1,4 @@
-using System;
+ï»¿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Runtime.InteropServices;
@@ -70,7 +70,7 @@ private static extern bool IsWindow(IntPtr hWnd);
         [DllImport("user32.dll")]
         private static extern IntPtr GetForegroundWindow();
 
-    // SendInput structures - ¥¿½Tªº 64 ¦ì¤¸µ²ºcÅé©w¸q
+    // SendInput structures - æ­£ç¢ºçš„ 64 ä½å…ƒçµæ§‹é«”å®šç¾©
         [StructLayout(LayoutKind.Sequential)]
     private struct INPUT
       {
@@ -86,7 +86,7 @@ private static extern bool IsWindow(IntPtr hWnd);
        public uint dwFlags;
     public uint time;
             public UIntPtr dwExtraInfo;
-  // »İ­n¶ñ¥R¥H¤Ç°t MOUSEINPUT ªº¤j¤p¡]¦b 64 ¦ì¤¸¨t²Î¤W¡^
+  // éœ€è¦å¡«å……ä»¥åŒ¹é… MOUSEINPUT çš„å¤§å°ï¼ˆåœ¨ 64 ä½å…ƒç³»çµ±ä¸Šï¼‰
             public ulong padding1;
             public uint padding2;
         }
@@ -105,24 +105,24 @@ private const uint WM_KEYUP = 0x0101;
   private const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
         private const uint KEYEVENTF_SCANCODE = 0x0008;
 
- // «öÁäÅã¥Ü¦WºÙ¬M®gªí
+ // æŒ‰éµé¡¯ç¤ºåç¨±æ˜ å°„è¡¨
         private static readonly Dictionary<Keys, string> KeyDisplayNames = new Dictionary<Keys, string>
         {
-            // ²Å¸¹Áä - Shift ®É·|ÅÜ¦¨ <> µ¥²Å¸¹
-  { Keys.OemPeriod, ". (>)" },      // . ©M >
-      { Keys.Oemcomma, ", (<)" },       // , ©M <
-            { Keys.OemQuestion, "/ (?)" },  // / ©M ?
-     { Keys.OemSemicolon, "; (:)" },   // ; ©M :
-            { Keys.OemQuotes, "' (\")" },     // ' ©M "
-            { Keys.OemOpenBrackets, "[ ({)" }, // [ ©M {
-            { Keys.OemCloseBrackets, "] (})" }, // ] ©M }
-      { Keys.OemBackslash, "\\ (|)" },  // \ ©M |
- { Keys.OemMinus, "- (_)" },    // - ©M _
-{ Keys.Oemplus, "= (+)" },        // = ©M +
-    { Keys.Oemtilde, "` (~)" },     // ` ©M ~
-            { Keys.OemPipe, "\\ (|)" },       // \ ©M |
-            // ±`¥Î¥\¯àÁä
- { Keys.Space, "ªÅ¥ÕÁä" },
+            // ç¬¦è™Ÿéµ - Shift æ™‚æœƒè®Šæˆ <> ç­‰ç¬¦è™Ÿ
+  { Keys.OemPeriod, ". (>)" },      // . å’Œ >
+      { Keys.Oemcomma, ", (<)" },       // , å’Œ <
+            { Keys.OemQuestion, "/ (?)" },  // / å’Œ ?
+     { Keys.OemSemicolon, "; (:)" },   // ; å’Œ :
+            { Keys.OemQuotes, "' (\")" },     // ' å’Œ "
+            { Keys.OemOpenBrackets, "[ ({)" }, // [ å’Œ {
+            { Keys.OemCloseBrackets, "] (})" }, // ] å’Œ }
+      { Keys.OemBackslash, "\\ (|)" },  // \ å’Œ |
+ { Keys.OemMinus, "- (_)" },    // - å’Œ _
+{ Keys.Oemplus, "= (+)" },        // = å’Œ +
+    { Keys.Oemtilde, "` (~)" },     // ` å’Œ ~
+            { Keys.OemPipe, "\\ (|)" },       // \ å’Œ |
+            // å¸¸ç”¨åŠŸèƒ½éµ
+ { Keys.Space, "ç©ºç™½éµ" },
             { Keys.Enter, "Enter" },
   { Keys.Escape, "Esc" },
         { Keys.Tab, "Tab" },
@@ -133,25 +133,25 @@ private const uint WM_KEYUP = 0x0101;
             { Keys.End, "End" },
             { Keys.PageUp, "Page Up" },
        { Keys.PageDown, "Page Down" },
- // ¤è¦VÁä
-            { Keys.Left, "¡ö ¥ª" },
-       { Keys.Right, "¡÷ ¥k" },
-        { Keys.Up, "¡ô ¤W" },
-            { Keys.Down, "¡õ ¤U" },
-  // ­×¹¢Áä
-        { Keys.LShiftKey, "¥ª Shift" },
-     { Keys.RShiftKey, "¥k Shift" },
+ // æ–¹å‘éµ
+            { Keys.Left, "â† å·¦" },
+       { Keys.Right, "â†’ å³" },
+        { Keys.Up, "â†‘ ä¸Š" },
+            { Keys.Down, "â†“ ä¸‹" },
+  // ä¿®é£¾éµ
+        { Keys.LShiftKey, "å·¦ Shift" },
+     { Keys.RShiftKey, "å³ Shift" },
             { Keys.ShiftKey, "Shift" },
-            { Keys.LControlKey, "¥ª Ctrl" },
-          { Keys.RControlKey, "¥k Ctrl" },
+            { Keys.LControlKey, "å·¦ Ctrl" },
+          { Keys.RControlKey, "å³ Ctrl" },
        { Keys.ControlKey, "Ctrl" },
- { Keys.LMenu, "¥ª Alt" },
-  { Keys.RMenu, "¥k Alt" },
+ { Keys.LMenu, "å·¦ Alt" },
+  { Keys.RMenu, "å³ Alt" },
     { Keys.Menu, "Alt" },
      { Keys.Alt, "Alt" },
-       { Keys.LWin, "¥ª Win" },
-            { Keys.RWin, "¥k Win" },
-            // ¼Æ¦rÁä½L
+       { Keys.LWin, "å·¦ Win" },
+            { Keys.RWin, "å³ Win" },
+            // æ•¸å­—éµç›¤
             { Keys.NumPad0, "Num 0" },
        { Keys.NumPad1, "Num 1" },
       { Keys.NumPad2, "Num 2" },
@@ -168,7 +168,7 @@ private const uint WM_KEYUP = 0x0101;
             { Keys.Decimal, "Num ." },
             { Keys.Divide, "Num /" },
             { Keys.NumLock, "Num Lock" },
-            // ¨ä¥L
+            // å…¶ä»–
  { Keys.CapsLock, "Caps Lock" },
             { Keys.PrintScreen, "Print Screen" },
             { Keys.Scroll, "Scroll Lock" },
@@ -176,7 +176,7 @@ private const uint WM_KEYUP = 0x0101;
    };
 
       /// <summary>
-  /// ¨ú±o«öÁäªºÅã¥Ü¦WºÙ¡]§óª½Æ[ªº¤¤¤å¦WºÙ¡^
+  /// å–å¾—æŒ‰éµçš„é¡¯ç¤ºåç¨±ï¼ˆæ›´ç›´è§€çš„ä¸­æ–‡åç¨±ï¼‰
         /// </summary>
         private static string GetKeyDisplayName(Keys key)
         {
@@ -186,20 +186,20 @@ private const uint WM_KEYUP = 0x0101;
         }
 
         /// <summary>
-   /// ±qÅã¥Ü¦WºÙÁÙ­ì¬° Keys ¦CÁ|­È
+   /// å¾é¡¯ç¤ºåç¨±é‚„åŸç‚º Keys åˆ—èˆ‰å€¼
     /// </summary>
         private static Keys ParseKeyFromDisplay(string displayName)
   {
-// ¥ı¹Á¸Õ±q¬M®gªí¤Ï¦V¬d§ä
+// å…ˆå˜—è©¦å¾æ˜ å°„è¡¨åå‘æŸ¥æ‰¾
       foreach (var kvp in KeyDisplayNames)
             {
   if (kvp.Value == displayName)
       return kvp.Key;
             }
-        // ¦pªG§ä¤£¨ì¡A¹Á¸Õª½±µ¸ÑªR
+        // å¦‚æœæ‰¾ä¸åˆ°ï¼Œå˜—è©¦ç›´æ¥è§£æ
         if (Enum.TryParse<Keys>(displayName, out Keys result))
          return result;
-            throw new ArgumentException($"µLªkÃÑ§Oªº«öÁä¦WºÙ: {displayName}");
+            throw new ArgumentException($"ç„¡æ³•è­˜åˆ¥çš„æŒ‰éµåç¨±: {displayName}");
     }
 
         public Form1()
@@ -576,36 +576,59 @@ private void BtnStartRecording_Click(object sender, EventArgs e)
 
      private void BtnLoadScript_Click(object sender, EventArgs e)
  {
-     OpenFileDialog ofd = new OpenFileDialog
+  OpenFileDialog ofd = new OpenFileDialog
             {
-      Filter = "JSON Script|*.json"
-            };
+      Filter = "JSON è…³æœ¬|*.json",
+            Title = "è¼‰å…¥è…³æœ¬"
+       };
 
             if (ofd.ShowDialog() == DialogResult.OK)
-            {
+ {
    try
-        {
+    {
           string json = File.ReadAllText(ofd.FileName);
   recordedEvents = JsonSerializer.Deserialize<List<MacroEvent>>(json) ?? new List<MacroEvent>();
-           lblRecordingStatus.Text = $"Loaded | Events: {recordedEvents.Count}";
-     AddLog($"Loaded: {recordedEvents.Count} events");
-       MessageBox.Show($"Loaded {recordedEvents.Count} events");
-    }
+    lblRecordingStatus.Text = $"å·²è¼‰å…¥ | äº‹ä»¶æ•¸: {recordedEvents.Count}";
+     AddLog($"å·²è¼‰å…¥: {recordedEvents.Count} å€‹äº‹ä»¶");
+MessageBox.Show($"å·²è¼‰å…¥ {recordedEvents.Count} å€‹äº‹ä»¶", "è¼‰å…¥æˆåŠŸ", MessageBoxButtons.OK, MessageBoxIcon.Information);
+       
+       // æ›´æ–° UI ç‹€æ…‹ï¼Œå•Ÿç”¨é–‹å§‹æ’­æ”¾æŒ‰éµ
+            UpdateUI();
+  }
      catch (Exception ex)
          {
-             AddLog($"Load failed: {ex.Message}");
-          MessageBox.Show($"Load failed: {ex.Message}");
+         AddLog($"è¼‰å…¥å¤±æ•—: {ex.Message}");
+      MessageBox.Show($"è¼‰å…¥å¤±æ•—: {ex.Message}", "éŒ¯èª¤", MessageBoxButtons.OK, MessageBoxIcon.Error);
  }
           }
-     }
+   }
 
         private void BtnClearEvents_Click(object sender, EventArgs e)
         {
-    if (MessageBox.Show("Clear all events?", "Confirm", MessageBoxButtons.YesNo) == DialogResult.Yes)
+       if (recordedEvents.Count == 0)
+          {
+ MessageBox.Show("ç›®å‰æ²’æœ‰ä»»ä½•äº‹ä»¶å¯æ¸…é™¤", "æç¤º", MessageBoxButtons.OK, MessageBoxIcon.Information);
+       return;
+  }
+
+    // é¡¯ç¤ºè­¦å‘Šè¦–çª—
+    DialogResult result = MessageBox.Show(
+     $"ç¢ºå®šè¦æ¸…é™¤æ‰€æœ‰ {recordedEvents.Count} å€‹äº‹ä»¶å—ï¼Ÿ\n\næ­¤æ“ä½œç„¡æ³•å¾©åŸï¼",
+         "âš ï¸ è­¦å‘Š - æ¸…é™¤æ‰€æœ‰äº‹ä»¶",
+    MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning,
+   MessageBoxDefaultButton.Button2  // é è¨­é¸æ“‡ã€Œå¦ã€
+    );
+
+      if (result == DialogResult.Yes)
 {
-                recordedEvents.Clear();
-    lblRecordingStatus.Text = "Cleared | Events: 0";
-AddLog("All events cleared");
+       recordedEvents.Clear();
+    lblRecordingStatus.Text = "å·²æ¸…é™¤ | äº‹ä»¶æ•¸: 0";
+AddLog("å·²æ¸…é™¤æ‰€æœ‰äº‹ä»¶");
+        MessageBox.Show("æ‰€æœ‰äº‹ä»¶å·²æ¸…é™¤", "å®Œæˆ", MessageBoxButtons.OK, MessageBoxIcon.Information);
+       
+   // æ›´æ–° UI ç‹€æ…‹
+  UpdateUI();
           }
         }
 
@@ -613,14 +636,14 @@ AddLog("All events cleared");
         {
          if (recordedEvents.Count == 0)
        {
-                MessageBox.Show("¨S¦³¨Æ¥ó¥iÅã¥Ü");
-        AddLog("¨S¦³¨Æ¥ó¥iÀËµø");
+                MessageBox.Show("æ²’æœ‰äº‹ä»¶å¯é¡¯ç¤º");
+        AddLog("æ²’æœ‰äº‹ä»¶å¯æª¢è¦–");
          return;
       }
 
      Form eventViewer = new Form
     {
- Text = "ÀËµø¨Æ¥ó",
+ Text = "æª¢è¦–äº‹ä»¶",
     Width = 700,
    Height = 500,
    StartPosition = FormStartPosition.CenterParent,
@@ -633,19 +656,19 @@ AddLog("All events cleared");
            ReadOnly = true
         };
 
-     dgv.Columns.Add("KeyCode", "«öÁä");
-    dgv.Columns.Add("EventType", "Ãş«¬");
- dgv.Columns.Add("Timestamp", "®É¶¡ (¬í)");
+     dgv.Columns.Add("KeyCode", "æŒ‰éµ");
+    dgv.Columns.Add("EventType", "é¡å‹");
+ dgv.Columns.Add("Timestamp", "æ™‚é–“ (ç§’)");
 
       foreach (MacroEvent evt in recordedEvents)
          {
   string keyName = GetKeyDisplayName(evt.KeyCode);
-  string eventType = evt.EventType == "down" ? "«ö¤U" : "©ñ¶}";
+  string eventType = evt.EventType == "down" ? "æŒ‰ä¸‹" : "æ”¾é–‹";
   dgv.Rows.Add(keyName, eventType, evt.Timestamp.ToString("F3"));
   }
 
             eventViewer.Controls.Add(dgv);
-      AddLog($"¥¿¦bÀËµø {recordedEvents.Count} ­Ó¨Æ¥ó");
+      AddLog($"æ­£åœ¨æª¢è¦– {recordedEvents.Count} å€‹äº‹ä»¶");
       eventViewer.ShowDialog();
         }
 
@@ -653,16 +676,16 @@ AddLog("All events cleared");
         {
        if (recordedEvents.Count == 0)
         {
-           MessageBox.Show("¨S¦³¨Æ¥ó¥i½s¿è");
-      AddLog("¨S¦³¨Æ¥ó¥i½s¿è");
+           MessageBox.Show("æ²’æœ‰äº‹ä»¶å¯ç·¨è¼¯");
+      AddLog("æ²’æœ‰äº‹ä»¶å¯ç·¨è¼¯");
    return;
             }
 
-   AddLog("¥¿¦b¶}±Ò½s¿è¾¹...");
+   AddLog("æ­£åœ¨é–‹å•Ÿç·¨è¼¯å™¨...");
 
       Form editorForm = new Form
   {
-   Text = "½s¿è¸}¥»",
+   Text = "ç·¨è¼¯è…³æœ¬",
      Width = 800,
         Height = 600,
             StartPosition = FormStartPosition.CenterParent,
@@ -680,45 +703,45 @@ AddLog("All events cleared");
      AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.AllCells
      };
 
-      // «Ø¥ß«öÁä¤U©Ô¿ï³æÄæ¦ì
+      // å»ºç«‹æŒ‰éµä¸‹æ‹‰é¸å–®æ¬„ä½
 DataGridViewComboBoxColumn keyColumn = new DataGridViewComboBoxColumn
       {
     Name = "KeyCode",
- HeaderText = "«öÁä",
+ HeaderText = "æŒ‰éµ",
   Width = 150
      };
-        // ²K¥[©Ò¦³¥i¥Îªº«öÁä¿ï¶µ
+        // æ·»åŠ æ‰€æœ‰å¯ç”¨çš„æŒ‰éµé¸é …
   foreach (var kvp in KeyDisplayNames)
         {
          keyColumn.Items.Add(kvp.Value);
         }
-        // ¤]²K¥[±`¥Îªº¦r¥À©M¼Æ¦rÁä
+        // ä¹Ÿæ·»åŠ å¸¸ç”¨çš„å­—æ¯å’Œæ•¸å­—éµ
   for (char c = 'A'; c <= 'Z'; c++)
       keyColumn.Items.Add(c.ToString());
         for (char c = '0'; c <= '9'; c++)
       keyColumn.Items.Add(c.ToString());
-        // ²K¥[ F1-F12
+        // æ·»åŠ  F1-F12
        for (int i = 1; i <= 12; i++)
      keyColumn.Items.Add($"F{i}");
         dgv.Columns.Add(keyColumn);
 
-        // «Ø¥ßÃş«¬¤U©Ô¿ï³æÄæ¦ì
+        // å»ºç«‹é¡å‹ä¸‹æ‹‰é¸å–®æ¬„ä½
     DataGridViewComboBoxColumn typeColumn = new DataGridViewComboBoxColumn
         {
        Name = "EventType",
- HeaderText = "Ãş«¬",
+ HeaderText = "é¡å‹",
  Width = 80
  };
-   typeColumn.Items.Add("«ö¤U");
-        typeColumn.Items.Add("©ñ¶}");
+   typeColumn.Items.Add("æŒ‰ä¸‹");
+        typeColumn.Items.Add("æ”¾é–‹");
         dgv.Columns.Add(typeColumn);
 
-        dgv.Columns.Add("Timestamp", "®É¶¡ (¬í)");
+        dgv.Columns.Add("Timestamp", "æ™‚é–“ (ç§’)");
 
     foreach (MacroEvent evt in recordedEvents)
  {
      string keyName = GetKeyDisplayName(evt.KeyCode);
-        string eventType = evt.EventType == "down" ? "«ö¤U" : "©ñ¶}";
+        string eventType = evt.EventType == "down" ? "æŒ‰ä¸‹" : "æ”¾é–‹";
   dgv.Rows.Add(keyName, eventType, evt.Timestamp.ToString("F3"));
        }
 
@@ -731,8 +754,8 @@ Width = 760,
  BorderStyle = BorderStyle.FixedSingle
    };
 
-Button saveBtn = new Button { Text = "Àx¦s", Width = 100, Height = 30, Left = 10, Top = 10 };
-Button cancelBtn = new Button { Text = "¨ú®ø", Width = 100, Height = 30, Left = 120, Top = 10 };
+Button saveBtn = new Button { Text = "å„²å­˜", Width = 100, Height = 30, Left = 10, Top = 10 };
+Button cancelBtn = new Button { Text = "å–æ¶ˆ", Width = 100, Height = 30, Left = 120, Top = 10 };
 
        saveBtn.Click += (s, args) =>
      {
@@ -746,7 +769,7 @@ Button cancelBtn = new Button { Text = "¨ú®ø", Width = 100, Height = 30, Left = 
            string keyDisplayName = row.Cells[0].Value.ToString();
        Keys keyCode = ParseKeyFromDisplay(keyDisplayName);
     string eventTypeDisplay = row.Cells[1].Value.ToString();
-      string eventType = eventTypeDisplay == "«ö¤U" ? "down" : "up";
+      string eventType = eventTypeDisplay == "æŒ‰ä¸‹" ? "down" : "up";
            double timestamp = double.Parse(row.Cells[2].Value.ToString());
 
         recordedEvents.Add(new MacroEvent
@@ -758,15 +781,15 @@ Button cancelBtn = new Button { Text = "¨ú®ø", Width = 100, Height = 30, Left = 
     }
       }
 
-   lblRecordingStatus.Text = $"¤w½s¿è | ¨Æ¥ó¼Æ: {recordedEvents.Count}";
-       AddLog($"¤wÀx¦s½s¿è - {recordedEvents.Count} ­Ó¨Æ¥ó");
-    MessageBox.Show("ÅÜ§ó¤wÀx¦s");
+   lblRecordingStatus.Text = $"å·²ç·¨è¼¯ | äº‹ä»¶æ•¸: {recordedEvents.Count}";
+       AddLog($"å·²å„²å­˜ç·¨è¼¯ - {recordedEvents.Count} å€‹äº‹ä»¶");
+    MessageBox.Show("è®Šæ›´å·²å„²å­˜");
         editorForm.Close();
      }
  catch (Exception ex)
           {
-      AddLog($"Àx¦s¥¢±Ñ: {ex.Message}");
-       MessageBox.Show($"Àx¦s¥¢±Ñ: {ex.Message}");
+      AddLog($"å„²å­˜å¤±æ•—: {ex.Message}");
+       MessageBox.Show($"å„²å­˜å¤±æ•—: {ex.Message}");
            }
 };
 
@@ -865,13 +888,13 @@ btnPanel.Controls.Add(saveBtn);
  // Check if we have a valid target window for background sending
     if (targetWindowHandle != IntPtr.Zero && IsWindow(targetWindowHandle))
         {
-      // ¹ï©ó Alt Áä¡A¨Ï¥Î¯S®íªºµo°e¤è¦¡
+      // å°æ–¼ Alt éµï¼Œä½¿ç”¨ç‰¹æ®Šçš„ç™¼é€æ–¹å¼
       if (IsAltKey(evt.KeyCode))
     {
         SendAltKeyToWindow(targetWindowHandle, evt.KeyCode, evt.EventType == "down");
             AddLog($"BG(Alt): {evt.KeyCode} ({evt.EventType})");
        }
-          // ¹ï©ó¤è¦VÁä¡A¨Ï¥Î AttachThreadInput ¤è¦¡
+          // å°æ–¼æ–¹å‘éµï¼Œä½¿ç”¨ AttachThreadInput æ–¹å¼
  else if (IsExtendedKey(evt.KeyCode))
   {
        SendKeyWithThreadAttach(targetWindowHandle, evt.KeyCode, evt.EventType == "down");
@@ -879,7 +902,7 @@ btnPanel.Controls.Add(saveBtn);
   }
       else
      {
-           // ¤@¯ë«öÁä¡G¨Ï¥Î­I´º¼Ò¦¡
+           // ä¸€èˆ¬æŒ‰éµï¼šä½¿ç”¨èƒŒæ™¯æ¨¡å¼
     SendKeyToWindow(targetWindowHandle, evt.KeyCode, evt.EventType == "down");
     AddLog($"BG: {evt.KeyCode} ({evt.EventType})");
   }
@@ -898,7 +921,7 @@ SendKeyForeground(evt.KeyCode, evt.EventType == "down");
  }
 
         /// <summary>
-        /// ÀË¬d¬O§_¬° Alt Áä
+        /// æª¢æŸ¥æ˜¯å¦ç‚º Alt éµ
         /// </summary>
         private bool IsAltKey(Keys key)
         {
@@ -906,7 +929,7 @@ SendKeyForeground(evt.KeyCode, evt.EventType == "down");
         }
 
         /// <summary>
-     /// ¨Ï¥Î AttachThreadInput ¤èªkµo°e¤è¦VÁä¨ì­I´ºµøµ¡
+     /// ä½¿ç”¨ AttachThreadInput æ–¹æ³•ç™¼é€æ–¹å‘éµåˆ°èƒŒæ™¯è¦–çª—
         /// </summary>
         private void SendKeyWithThreadAttach(IntPtr hWnd, Keys key, bool isKeyDown)
         {
@@ -951,7 +974,7 @@ SendKeyForeground(evt.KeyCode, evt.EventType == "down");
         }
 
     /// <summary>
-        /// µo°e Alt Áä¨ì­I´ºµøµ¡
+        /// ç™¼é€ Alt éµåˆ°èƒŒæ™¯è¦–çª—
     /// </summary>
         private void SendAltKeyToWindow(IntPtr hWnd, Keys key, bool isKeyDown)
         {
@@ -971,23 +994,23 @@ SendKeyForeground(evt.KeyCode, evt.EventType == "down");
   SetFocus(hWnd);
     }
 
-           // Alt Áä¨Ï¥Î¹ïÀ³ªºµêÀÀÁä½X
+           // Alt éµä½¿ç”¨å°æ‡‰çš„è™›æ“¬éµç¢¼
       byte vkCode;
        if (key == Keys.LMenu)
- vkCode = 0xA4; // VK_LMENU (¥ª Alt)
+ vkCode = 0xA4; // VK_LMENU (å·¦ Alt)
          else if (key == Keys.RMenu)
-            vkCode = 0xA5; // VK_RMENU (¥k Alt)
+            vkCode = 0xA5; // VK_RMENU (å³ Alt)
         else
-      vkCode = 0x12; // VK_MENU (¤@¯ë Alt)
+      vkCode = 0x12; // VK_MENU (ä¸€èˆ¬ Alt)
 
-            byte scanCode = 0x38; // Alt ªº±½´y½X
+            byte scanCode = 0x38; // Alt çš„æƒæç¢¼
 
           uint flags = 0;
             if (!isKeyDown)
        {
        flags |= KEYEVENTF_KEYUP;
        }
- // ¥k Alt »İ­n©µ¦ùÁäºX¼Ğ
+ // å³ Alt éœ€è¦å»¶ä¼¸éµæ——æ¨™
         if (key == Keys.RMenu)
      {
         flags |= KEYEVENTF_EXTENDEDKEY;
@@ -995,11 +1018,11 @@ SendKeyForeground(evt.KeyCode, evt.EventType == "down");
 
        keybd_event(vkCode, scanCode, flags, UIntPtr.Zero);
 
-  // ¦P®É¤]¹Á¸Õ¥Î PostMessage µo°e
+  // åŒæ™‚ä¹Ÿå˜—è©¦ç”¨ PostMessage ç™¼é€
      uint lParamValue;
       if (isKeyDown)
          {
-           // context code = 1 ªí¥Ü Alt Áä
+           // context code = 1 è¡¨ç¤º Alt éµ
       lParamValue = 1u | ((uint)scanCode << 16) | (1u << 29);
       if (key == Keys.RMenu) lParamValue |= (1u << 24);
           }
@@ -1013,7 +1036,7 @@ SendKeyForeground(evt.KeyCode, evt.EventType == "down");
                 uint msg = isKeyDown ? WM_SYSKEYDOWN : WM_SYSKEYUP;
                 PostMessage(hWnd, msg, (IntPtr)vkCode, lParam);
 
- AddLog($"Alt «öÁä: VK=0x{vkCode:X2}, SC=0x{scanCode:X2}, flags=0x{flags:X}");
+ AddLog($"Alt æŒ‰éµ: VK=0x{vkCode:X2}, SC=0x{scanCode:X2}, flags=0x{flags:X}");
       }
          finally
             {
@@ -1025,31 +1048,31 @@ SendKeyForeground(evt.KeyCode, evt.EventType == "down");
     }
 
 /// <summary>
-        /// ¨ú±o«öÁäªº±½´y½X
+        /// å–å¾—æŒ‰éµçš„æƒæç¢¼
  /// </summary>
     private byte GetScanCode(Keys key)
       {
  return key switch
             {
-     Keys.Left => 0x4B,      // ¥ª¤è¦VÁä
-        Keys.Right => 0x4D,     // ¥k¤è¦VÁä
-        Keys.Up => 0x48,        // ¤W¤è¦VÁä
- Keys.Down => 0x50,      // ¤U¤è¦VÁä
-        Keys.Insert => 0x52,    // Insert Áä
-      Keys.Delete => 0x53,    // Delete Áä
-   Keys.Home => 0x47,      // Home Áä
-              Keys.End => 0x4F,       // End Áä
-     Keys.PageUp => 0x49,    // Page Up Áä
-    Keys.PageDown => 0x51,  // Page Down Áä
-                Keys.Menu => 0x38,      // Alt Áä
-      Keys.LMenu => 0x38,     // ¥ª Alt Áä
-  Keys.RMenu => 0x38,     // ¥k Alt Áä
+     Keys.Left => 0x4B,      // å·¦æ–¹å‘éµ
+        Keys.Right => 0x4D,     // å³æ–¹å‘éµ
+        Keys.Up => 0x48,        // ä¸Šæ–¹å‘éµ
+ Keys.Down => 0x50,      // ä¸‹æ–¹å‘éµ
+        Keys.Insert => 0x52,    // Insert éµ
+      Keys.Delete => 0x53,    // Delete éµ
+   Keys.Home => 0x47,      // Home éµ
+              Keys.End => 0x4F,       // End éµ
+     Keys.PageUp => 0x49,    // Page Up éµ
+    Keys.PageDown => 0x51,  // Page Down éµ
+                Keys.Menu => 0x38,      // Alt éµ
+      Keys.LMenu => 0x38,     // å·¦ Alt éµ
+  Keys.RMenu => 0x38,     // å³ Alt éµ
      _ => (byte)MapVirtualKey((uint)key, MAPVK_VK_TO_VSC)
             };
         }
 
         /// <summary>
-        /// «e´º¼Ò¦¡µo°e«öÁä¡]¨Ï¥Î keybd_event API¡^
+        /// å‰æ™¯æ¨¡å¼ç™¼é€æŒ‰éµï¼ˆä½¿ç”¨ keybd_event APIï¼‰
         /// </summary>
         private void SendKeyForeground(Keys key, bool isKeyDown)
     {
@@ -1071,7 +1094,7 @@ SendKeyForeground(evt.KeyCode, evt.EventType == "down");
         }
 
      /// <summary>
-        /// ÀË¬d¬O§_¬°©µ¦ùÁä¡]¤è¦VÁä¡BInsert¡BDelete µ¥¡^
+        /// æª¢æŸ¥æ˜¯å¦ç‚ºå»¶ä¼¸éµï¼ˆæ–¹å‘éµã€Insertã€Delete ç­‰ï¼‰
         /// </summary>
         private bool IsExtendedKey(Keys key)
      {
@@ -1082,7 +1105,7 @@ key == Keys.PageUp || key == Keys.PageDown || key == Keys.NumLock || key == Keys
         }
 
      /// <summary>
-        /// ­I´º¼Ò¦¡µo°e«öÁä¡]¨Ï¥Î PostMessage¡^
+        /// èƒŒæ™¯æ¨¡å¼ç™¼é€æŒ‰éµï¼ˆä½¿ç”¨ PostMessageï¼‰
      /// </summary>
         private void SendKeyToWindow(IntPtr hWnd, Keys key, bool isKeyDown)
     {
@@ -1096,13 +1119,13 @@ key == Keys.PageUp || key == Keys.PageDown || key == Keys.NumLock || key == Keys
       bool isExtendedKey = IsExtendedKey(key);
 bool isAltKey = IsAltKey(key);
 
-            // «Øºc lParam °Ñ¼Æ
-            // Bits 0-15: ­«½Æ¦¸¼Æ (1)
-       // Bits 16-23: ±½´y½X
-  // Bit 24: ©µ¦ùÁäºX¼Ğ
-            // Bit 29: ¤º®e¥N½X (Alt Áä¬° 1)
-   // Bit 30: «e¤@­ÓÁäª¬ºA
-            // Bit 31: Âà´«ª¬ºA (0 = «ö¤U, 1 = ©ñ¶})
+            // å»ºæ§‹ lParam åƒæ•¸
+            // Bits 0-15: é‡è¤‡æ¬¡æ•¸ (1)
+       // Bits 16-23: æƒæç¢¼
+  // Bit 24: å»¶ä¼¸éµæ——æ¨™
+            // Bit 29: å…§å®¹ä»£ç¢¼ (Alt éµç‚º 1)
+   // Bit 30: å‰ä¸€å€‹éµç‹€æ…‹
+            // Bit 31: è½‰æ›ç‹€æ…‹ (0 = æŒ‰ä¸‹, 1 = æ”¾é–‹)
             uint lParamValue;
        if (isKeyDown)
     {
@@ -1142,7 +1165,7 @@ bool isAltKey = IsAltKey(key);
      isPlaying = false;
             lblPlaybackStatus.Text = "Playback: Stopped";
             lblPlaybackStatus.ForeColor = Color.Orange;
-            AddLog("¼½©ñ¤w°±¤î");
+            AddLog("æ’­æ”¾å·²åœæ­¢");
 UpdateUI();
         }
 
@@ -1155,7 +1178,7 @@ UpdateUI();
 
    keyboardHook?.Uninstall();
             monitorTimer?.Stop();
-            AddLog("À³¥Îµ{¦¡¤wÃö³¬");
+            AddLog("æ‡‰ç”¨ç¨‹å¼å·²é—œé–‰");
         }
 
         private void UpdateUI()
@@ -1173,14 +1196,14 @@ UpdateUI();
 
         private void Form1_Load(object sender, EventArgs e)
         {
-     lblStatus.Text = "´Nºü¡GÂIÀ»¡u¶}©l¿ı»s¡v¶}©l";
-            lblRecordingStatus.Text = "¿ı»s¡G©|¥¼¶}©l";
-            lblPlaybackStatus.Text = "¼½©ñ¡G©|¥¼¶}©l";
+     lblStatus.Text = "å°±ç·’ï¼šé»æ“Šã€Œé–‹å§‹éŒ„è£½ã€é–‹å§‹";
+            lblRecordingStatus.Text = "éŒ„è£½ï¼šå°šæœªé–‹å§‹";
+            lblPlaybackStatus.Text = "æ’­æ”¾ï¼šå°šæœªé–‹å§‹";
         }
 
  private void picPreview_Click(object sender, EventArgs e)
   {
-      // picPreview Åã¥Ü§Y®É¤é»x
+      // picPreview é¡¯ç¤ºå³æ™‚æ—¥èªŒ
         }
 
         [Serializable]

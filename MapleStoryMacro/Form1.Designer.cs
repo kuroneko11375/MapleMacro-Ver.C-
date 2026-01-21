@@ -126,7 +126,7 @@ namespace MapleStoryMacro
             // 
             // btnClearEvents
             // 
-            btnClearEvents.Location = new Point(228, 410);
+            btnClearEvents.Location = new Point(442, 410);
             btnClearEvents.Name = "btnClearEvents";
             btnClearEvents.Size = new Size(100, 30);
             btnClearEvents.TabIndex = 8;
@@ -144,7 +144,7 @@ namespace MapleStoryMacro
             // 
             // btnEditEvents
             // 
-            btnEditEvents.Location = new Point(444, 410);
+            btnEditEvents.Location = new Point(226, 410);
             btnEditEvents.Name = "btnEditEvents";
             btnEditEvents.Size = new Size(100, 30);
             btnEditEvents.TabIndex = 10;
