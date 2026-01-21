@@ -86,5 +86,5 @@
 
 ## 📄 授權
 
-本專案採用 [MIT License](https://www.google.com/search?q=LICENSE) 授權條款。
+本專案採用 [MIT License](https://github.com/kuroneko11375/MapleMacro-Ver.C-/blob/master/LICENSE.txt) 授權條款。
 
