@@ -14,14 +14,20 @@ namespace MapleStoryMacro
     public partial class Form1 : Form
     {
     private List<MacroEvent> recordedEvents = new List<MacroEvent>();
-        private bool isRecording = false;
-        private bool isPlaying = false;
-        private double recordStartTime = 0;
-private IntPtr targetWindowHandle = IntPtr.Zero;
-     private KeyboardHookDLL keyboardHook;
+    private bool isRecording = false;
+    private bool isPlaying = false;
+    private double recordStartTime = 0;
+    private IntPtr targetWindowHandle = IntPtr.Zero;
+    private KeyboardHookDLL keyboardHook;
 
-        // Log System
-        private List<string> logMessages = new List<string>();
+    // 全局熱鍵設定
+    private Keys playHotkey = Keys.F9;      // 預設播放熱鍵
+    private Keys stopHotkey = Keys.F10;     // 預設停止熱鍵
+    private bool hotkeyEnabled = true;      // 熱鍵是否啟用
+    private KeyboardHookDLL hotkeyHook;     // 全局熱鍵監聽器
+
+    // Log System
+    private List<string> logMessages = new List<string>();
     private readonly int MAX_LOG_LINES = 15;
     private readonly object logLock = new object();
 
@@ -206,36 +212,42 @@ private const uint WM_KEYUP = 0x0101;
         {
             InitializeComponent();
 
- // Bind all button events
-   btnStartRecording.Click += BtnStartRecording_Click;
-     btnStopRecording.Click += BtnStopRecording_Click;
+            // Bind all button events
+            btnStartRecording.Click += BtnStartRecording_Click;
+            btnStopRecording.Click += BtnStopRecording_Click;
             btnSaveScript.Click += BtnSaveScript_Click;
             btnLoadScript.Click += BtnLoadScript_Click;
-   btnClearEvents.Click += BtnClearEvents_Click;
-         btnViewEvents.Click += BtnViewEvents_Click;
-    btnEditEvents.Click += BtnEditEvents_Click;
-btnStartPlayback.Click += BtnStartPlayback_Click;
+            btnClearEvents.Click += BtnClearEvents_Click;
+            btnViewEvents.Click += BtnViewEvents_Click;
+            btnEditEvents.Click += BtnEditEvents_Click;
+            btnStartPlayback.Click += BtnStartPlayback_Click;
             btnStopPlayback.Click += BtnStopPlayback_Click;
-    btnRefreshWindow.Click += BtnRefreshWindow_Click;
-     btnLockWindow.Click += BtnLockWindow_Click;
-       FormClosing += Form1_FormClosing;
+            btnRefreshWindow.Click += BtnRefreshWindow_Click;
+            btnLockWindow.Click += BtnLockWindow_Click;
+            btnHotkeySettings.Click += (s, e) => OpenHotkeySettings();
+            FormClosing += Form1_FormClosing;
 
             // Enable KeyPreview to capture all keys
-this.KeyPreview = true;
+            this.KeyPreview = true;
             this.KeyDown += Form1_KeyDown;
             this.KeyUp += Form1_KeyUp;
 
-            // Initialize keyboard hook
+            // Initialize keyboard hook for recording
             keyboardHook = new KeyboardHookDLL();
-    keyboardHook.OnKeyEvent += KeyboardHook_OnKeyEvent;
+            keyboardHook.OnKeyEvent += KeyboardHook_OnKeyEvent;
+
+            // Initialize global hotkey hook
+            hotkeyHook = new KeyboardHookDLL();
+            hotkeyHook.OnKeyEvent += HotkeyHook_OnKeyEvent;
+            hotkeyHook.Install();  // 始終啟用全局熱鍵監聽
 
             // Initialize log system
-  monitorTimer.Interval = 100;
+            monitorTimer.Interval = 100;
             monitorTimer.Tick += MonitorTimer_Tick;
-  monitorTimer.Start();
+            monitorTimer.Start();
 
-            AddLog("Application started");
-  AddLog("Ready for recording...");
+            AddLog("應用程式已啟動");
+            AddLog($"全局熱鍵：播放={GetKeyDisplayName(playHotkey)}, 停止={GetKeyDisplayName(stopHotkey)}");
 
             UpdateUI();
             UpdateWindowStatus();
@@ -1171,14 +1183,151 @@ UpdateUI();
 
       private void Form1_FormClosing(object sender, FormClosingEventArgs e)
         {
-         if (isRecording)
-        BtnStopRecording_Click(null, null);
+            if (isRecording)
+                BtnStopRecording_Click(null, null);
             if (isPlaying)
-          isPlaying = false;
+                isPlaying = false;
 
-   keyboardHook?.Uninstall();
+            keyboardHook?.Uninstall();
+            hotkeyHook?.Uninstall();  // 停止全局熱鍵監聽
             monitorTimer?.Stop();
             AddLog("應用程式已關閉");
+        }
+
+        /// <summary>
+        /// 全局熱鍵事件處理
+        /// </summary>
+        private void HotkeyHook_OnKeyEvent(Keys keyCode, bool isKeyDown)
+        {
+            // 只處理按下事件，避免重複觸發
+            if (!isKeyDown || !hotkeyEnabled || isRecording)
+                return;
+
+            // 檢查是否為播放熱鍵
+            if (keyCode == playHotkey)
+            {
+                this.BeginInvoke(new Action(() =>
+                {
+                    if (!isPlaying && recordedEvents.Count > 0)
+                    {
+                        AddLog($"熱鍵觸發：開始播放 ({GetKeyDisplayName(playHotkey)})");
+                        BtnStartPlayback_Click(null, null);
+                    }
+                }));
+            }
+            // 檢查是否為停止熱鍵
+            else if (keyCode == stopHotkey)
+            {
+                this.BeginInvoke(new Action(() =>
+                {
+                    if (isPlaying)
+                    {
+                        AddLog($"熱鍵觸發：停止播放 ({GetKeyDisplayName(stopHotkey)})");
+                        BtnStopPlayback_Click(null, null);
+                    }
+                }));
+            }
+        }
+
+        /// <summary>
+        /// 設定熱鍵
+        /// </summary>
+        private void SetHotkeys(Keys play, Keys stop)
+        {
+            playHotkey = play;
+            stopHotkey = stop;
+            AddLog($"熱鍵已設定：播放={GetKeyDisplayName(play)}, 停止={GetKeyDisplayName(stop)}");
+        }
+
+        /// <summary>
+        /// 開啟熱鍵設定視窗
+        /// </summary>
+        private void OpenHotkeySettings()
+        {
+            Form settingsForm = new Form
+            {
+                Text = "熱鍵設定",
+                Width = 400,
+                Height = 250,
+                StartPosition = FormStartPosition.CenterParent,
+                Owner = this,
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                MaximizeBox = false,
+                MinimizeBox = false
+            };
+
+            // 播放熱鍵
+            Label lblPlay = new Label { Text = "播放熱鍵：", Left = 20, Top = 30, Width = 100 };
+            TextBox txtPlay = new TextBox 
+            { 
+                Left = 130, Top = 27, Width = 200, ReadOnly = true,
+                Text = GetKeyDisplayName(playHotkey),
+                Tag = playHotkey
+            };
+            txtPlay.KeyDown += (s, e) =>
+            {
+                e.SuppressKeyPress = true;
+                txtPlay.Text = GetKeyDisplayName(e.KeyCode);
+                txtPlay.Tag = e.KeyCode;
+            };
+
+            // 停止熱鍵
+            Label lblStop = new Label { Text = "停止熱鍵：", Left = 20, Top = 70, Width = 100 };
+            TextBox txtStop = new TextBox 
+            { 
+                Left = 130, Top = 67, Width = 200, ReadOnly = true,
+                Text = GetKeyDisplayName(stopHotkey),
+                Tag = stopHotkey
+            };
+            txtStop.KeyDown += (s, e) =>
+            {
+                e.SuppressKeyPress = true;
+                txtStop.Text = GetKeyDisplayName(e.KeyCode);
+                txtStop.Tag = e.KeyCode;
+            };
+
+            // 啟用熱鍵
+            CheckBox chkEnabled = new CheckBox 
+            { 
+                Text = "啟用全局熱鍵", Left = 20, Top = 110, Width = 150, 
+                Checked = hotkeyEnabled 
+            };
+
+            // 提示文字
+            Label lblHint = new Label 
+            { 
+                Text = "提示：點擊文字框後按下想要的按鍵", 
+                Left = 20, Top = 140, Width = 350, 
+                ForeColor = Color.Gray 
+            };
+
+            // 按鈕
+            Button btnSave = new Button { Text = "儲存", Left = 130, Top = 170, Width = 80 };
+            Button btnCancel = new Button { Text = "取消", Left = 220, Top = 170, Width = 80 };
+
+            btnSave.Click += (s, args) =>
+            {
+                playHotkey = (Keys)txtPlay.Tag;
+                stopHotkey = (Keys)txtStop.Tag;
+                hotkeyEnabled = chkEnabled.Checked;
+                AddLog($"熱鍵設定已儲存：播放={GetKeyDisplayName(playHotkey)}, 停止={GetKeyDisplayName(stopHotkey)}, 啟用={hotkeyEnabled}");
+                MessageBox.Show(
+                    $"熱鍵設定已儲存！\n\n" +
+                    $"播放熱鍵：{GetKeyDisplayName(playHotkey)}\n" +
+                    $"停止熱鍵：{GetKeyDisplayName(stopHotkey)}\n" +
+                    $"熱鍵狀態：{(hotkeyEnabled ? "已啟用" : "已停用")}",
+                    "設定完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                settingsForm.Close();
+            };
+
+            btnCancel.Click += (s, args) => settingsForm.Close();
+
+            settingsForm.Controls.AddRange(new Control[] 
+            { 
+                lblPlay, txtPlay, lblStop, txtStop, chkEnabled, lblHint, btnSave, btnCancel 
+            });
+
+            settingsForm.ShowDialog();
         }
 
         private void UpdateUI()
