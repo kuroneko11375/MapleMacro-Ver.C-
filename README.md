@@ -2,7 +2,7 @@
 
 **作者：** SchwarzeKatze_R
 
-**版本：** 1.0.2
+**版本：** 1.0.3
 
 **開發語言：** C# (.NET WinForms)
 
@@ -12,7 +12,8 @@
 
 
 ## 專案介面
-<img width="684" height="594" alt="image" src="https://github.com/user-attachments/assets/16b1cdd2-b470-4c28-b2b7-1447c6c9c658" />
+<img width="602" height="612" alt="image" src="https://github.com/user-attachments/assets/c28709f8-09c4-4b6c-a5cb-04a5d485451c" />
+
 
 
 
@@ -62,6 +63,11 @@
 
 
 ## 📅 更新紀錄
+### 2026/01/30 (v1.0.3)
+* 新增播放全局熱鍵
+* UI skin介面更動
+* 介面說明改動
+* 按鈕布局更改
 
 ### 2026/01/20 (v1.0.2)
 * 修正讀取存檔後無法觸發「開始播放」按鈕
