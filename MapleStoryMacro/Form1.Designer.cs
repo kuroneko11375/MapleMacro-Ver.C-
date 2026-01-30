@@ -1072,7 +1072,6 @@ namespace MapleStoryMacro
             MaximizeBox = false;
             Name = "Form1";
             StartPosition = FormStartPosition.CenterScreen;
-            Text = "🍁 Maple Macro - 按鍵錄製播放工具";
             Load += Form1_Load;
             ((System.ComponentModel.ISupportInitialize)picPreview).EndInit();
             ((System.ComponentModel.ISupportInitialize)numPlayTimes).EndInit();
