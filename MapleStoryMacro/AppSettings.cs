@@ -34,6 +34,11 @@ namespace MapleStoryMacro
         public int LoopCount { get; set; } = 1;
 
         /// <summary>
+        /// 方向鍵發送模式 (0=PostMessage, 1=ThreadAttach, 2=QuickFocus, 3=SendToChild)
+        /// </summary>
+        public int ArrowKeyMode { get; set; } = 1;
+
+        /// <summary>
         /// 自定義按鍵槽位設定
         /// </summary>
         public CustomKeySlotData[] CustomKeySlots { get; set; } = new CustomKeySlotData[5];

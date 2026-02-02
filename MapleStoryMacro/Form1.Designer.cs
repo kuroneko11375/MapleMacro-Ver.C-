@@ -45,6 +45,7 @@ namespace MapleStoryMacro
             btnScheduler = new CyberButton();
             btnStatistics = new CyberButton();
             btnSaveSettings = new CyberButton();
+            btnImportSettings = new CyberButton();
             grpRecording = new CyberGroupBox();
             label2 = new Label();
             grpScript = new CyberGroupBox();
@@ -74,7 +75,7 @@ namespace MapleStoryMacro
             txtWindowTitle.Font = new Font("Segoe UI", 10F);
             txtWindowTitle.ForeColor = Color.FromArgb(48, 49, 51);
             txtWindowTitle.Hint = "";
-            txtWindowTitle.Location = new Point(15, 12);
+            txtWindowTitle.Location = new Point(15, 25);
             txtWindowTitle.MaxLength = 32767;
             txtWindowTitle.Multiline = false;
             txtWindowTitle.Name = "txtWindowTitle";
@@ -94,7 +95,7 @@ namespace MapleStoryMacro
             lblStatus.AutoSize = true;
             lblStatus.Font = new Font("Microsoft JhengHei UI", 9F);
             lblStatus.ForeColor = Color.White;
-            lblStatus.Location = new Point(15, 59);
+            lblStatus.Location = new Point(15, 64);
             lblStatus.Name = "lblStatus";
             lblStatus.Size = new Size(61, 15);
             lblStatus.TabIndex = 1;
@@ -219,7 +220,7 @@ namespace MapleStoryMacro
             btnRefreshWindow.Lighting = false;
             btnRefreshWindow.LinearGradient_Background = false;
             btnRefreshWindow.LinearGradientPen = false;
-            btnRefreshWindow.Location = new Point(225, 12);
+            btnRefreshWindow.Location = new Point(227, 26);
             btnRefreshWindow.Name = "btnRefreshWindow";
             btnRefreshWindow.PenWidth = 15;
             btnRefreshWindow.Rounding = true;
@@ -259,7 +260,7 @@ namespace MapleStoryMacro
             btnLockWindow.Lighting = false;
             btnLockWindow.LinearGradient_Background = false;
             btnLockWindow.LinearGradientPen = false;
-            btnLockWindow.Location = new Point(334, 12);
+            btnLockWindow.Location = new Point(335, 26);
             btnLockWindow.Name = "btnLockWindow";
             btnLockWindow.PenWidth = 15;
             btnLockWindow.Rounding = true;
@@ -626,7 +627,7 @@ namespace MapleStoryMacro
             btnHotkeySettings.Lighting = false;
             btnHotkeySettings.LinearGradient_Background = false;
             btnHotkeySettings.LinearGradientPen = false;
-            btnHotkeySettings.Location = new Point(440, 12);
+            btnHotkeySettings.Location = new Point(440, 26);
             btnHotkeySettings.Name = "btnHotkeySettings";
             btnHotkeySettings.PenWidth = 15;
             btnHotkeySettings.Rounding = true;
@@ -787,7 +788,7 @@ namespace MapleStoryMacro
             btnSaveSettings.Lighting = false;
             btnSaveSettings.LinearGradient_Background = false;
             btnSaveSettings.LinearGradientPen = false;
-            btnSaveSettings.Location = new Point(549, 13);
+            btnSaveSettings.Location = new Point(552, 5);
             btnSaveSettings.Name = "btnSaveSettings";
             btnSaveSettings.PenWidth = 15;
             btnSaveSettings.Rounding = true;
@@ -796,11 +797,52 @@ namespace MapleStoryMacro
             btnSaveSettings.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
             btnSaveSettings.TabIndex = 28;
             btnSaveSettings.Tag = "Cyber";
-            btnSaveSettings.TextButton = "▼ 儲存設定";
+            btnSaveSettings.TextButton = "▼ 導出設定";
             btnSaveSettings.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
             btnSaveSettings.Timer_Effect_1 = 5;
             btnSaveSettings.Timer_RGB = 300;
             btnSaveSettings.Click += btnSaveSettings_Click;
+            // 
+            // btnImportSettings
+            // 
+            btnImportSettings.Alpha = 20;
+            btnImportSettings.BackColor = Color.Transparent;
+            btnImportSettings.Background = true;
+            btnImportSettings.Background_WidthPen = 4F;
+            btnImportSettings.BackgroundPen = true;
+            btnImportSettings.ColorBackground = Color.FromArgb(70, 90, 130);
+            btnImportSettings.ColorBackground_1 = Color.FromArgb(37, 52, 68);
+            btnImportSettings.ColorBackground_2 = Color.FromArgb(41, 63, 86);
+            btnImportSettings.ColorBackground_Pen = Color.FromArgb(29, 200, 238);
+            btnImportSettings.ColorLighting = Color.FromArgb(29, 200, 238);
+            btnImportSettings.ColorPen_1 = Color.FromArgb(37, 52, 68);
+            btnImportSettings.ColorPen_2 = Color.FromArgb(41, 63, 86);
+            btnImportSettings.CyberButtonStyle = ReaLTaiizor.Enum.Cyber.StateStyle.Custom;
+            btnImportSettings.Effect_1 = true;
+            btnImportSettings.Effect_1_ColorBackground = Color.FromArgb(29, 200, 238);
+            btnImportSettings.Effect_1_Transparency = 25;
+            btnImportSettings.Effect_2 = true;
+            btnImportSettings.Effect_2_ColorBackground = Color.White;
+            btnImportSettings.Effect_2_Transparency = 20;
+            btnImportSettings.Font = new Font("Microsoft JhengHei UI", 9F);
+            btnImportSettings.ForeColor = Color.FromArgb(245, 245, 245);
+            btnImportSettings.Lighting = false;
+            btnImportSettings.LinearGradient_Background = false;
+            btnImportSettings.LinearGradientPen = false;
+            btnImportSettings.Location = new Point(552, 44);
+            btnImportSettings.Name = "btnImportSettings";
+            btnImportSettings.PenWidth = 15;
+            btnImportSettings.Rounding = true;
+            btnImportSettings.RoundingInt = 70;
+            btnImportSettings.Size = new Size(99, 35);
+            btnImportSettings.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
+            btnImportSettings.TabIndex = 29;
+            btnImportSettings.Tag = "Cyber";
+            btnImportSettings.TextButton = "▲ 導入設定";
+            btnImportSettings.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            btnImportSettings.Timer_Effect_1 = 5;
+            btnImportSettings.Timer_RGB = 300;
+            btnImportSettings.Click += btnImportSettings_Click;
             // 
             // grpRecording
             // 
@@ -1052,11 +1094,12 @@ namespace MapleStoryMacro
             AutoScaleDimensions = new SizeF(7F, 15F);
             AutoScaleMode = AutoScaleMode.Font;
             BackColor = Color.FromArgb(30, 30, 35);
-            ClientSize = new Size(669, 596);
+            ClientSize = new Size(676, 596);
             Controls.Add(txtWindowTitle);
             Controls.Add(lblStatus);
             Controls.Add(picPreview);
             Controls.Add(btnRefreshWindow);
+            Controls.Add(btnImportSettings);
             Controls.Add(btnSaveSettings);
             Controls.Add(btnLockWindow);
             Controls.Add(btnHotkeySettings);
@@ -1103,6 +1146,7 @@ namespace MapleStoryMacro
         public ReaLTaiizor.Controls.CyberButton btnSaveScript;
         public ReaLTaiizor.Controls.CyberButton btnLoadScript;
         public ReaLTaiizor.Controls.CyberButton btnClearEvents;
+        public ReaLTaiizor.Controls.CyberButton btnImportSettings;
         public ReaLTaiizor.Controls.CyberButton btnViewEvents;
         public ReaLTaiizor.Controls.CyberButton btnEditEvents;
         public ReaLTaiizor.Controls.CyberButton btnStartPlayback;

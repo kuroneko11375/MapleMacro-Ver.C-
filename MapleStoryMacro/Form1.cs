@@ -41,6 +41,9 @@ namespace MapleStoryMacro
         private readonly int MAX_LOG_LINES = 15;
         private readonly object logLock = new object();
 
+        private KeyboardBlocker arrowKeyBlocker = new KeyboardBlocker();
+        private HashSet<Keys> pressedKeys = new HashSet<Keys>();
+
         // Windows API P/Invoke
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool SetForegroundWindow(IntPtr hWnd);
@@ -85,6 +88,49 @@ namespace MapleStoryMacro
 
         [DllImport("user32.dll")]
         private static extern IntPtr GetForegroundWindow();
+
+        // 子視窗列舉相關 API
+        [DllImport("user32.dll")]
+        private static extern bool EnumChildWindows(IntPtr hWndParent, EnumWindowsProc lpEnumFunc, IntPtr lParam);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+
+        [DllImport("user32.dll")]
+        private static extern bool IsWindowVisible(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+        [DllImport("user32.dll")]
+        private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+        [DllImport("user32.dll")]
+        private static extern bool BringWindowToTop(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool AllowSetForegroundWindow(int dwProcessId);
+
+
+        private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct RECT
+        {
+            public int Left, Top, Right, Bottom;
+        }
+
+        private const int SW_SHOWNOACTIVATE = 4;
+        private const int ASFW_ANY = -1;
+
+        // 方向鍵發送模式
+        private enum ArrowKeyMode
+        {
+            ThreadAttach,       // 線程附加模式（遊戲可用，會影響前景）
+            SendToChild,        // 發送到子視窗模式（純背景，不影響前景）
+            ThreadAttachWithBlocker // 線程附加 + 攔截前景
+        }
+        private ArrowKeyMode currentArrowKeyMode = ArrowKeyMode.ThreadAttach;
 
         // SendInput structures - 正確的 64 位元結構體定義
         [StructLayout(LayoutKind.Sequential)]
@@ -554,6 +600,56 @@ namespace MapleStoryMacro
                 targetWindowHandle = IntPtr.Zero;
                 AddLog("Target window not found");
             }
+
+            UpdateArrowKeyBlockerState();
+        }
+
+        private void UpdateArrowKeyBlockerState()
+        {
+            bool shouldEnable = isPlaying
+                && currentArrowKeyMode == ArrowKeyMode.ThreadAttachWithBlocker
+                && targetWindowHandle != IntPtr.Zero
+                && IsWindow(targetWindowHandle);
+
+            if (shouldEnable)
+            {
+                arrowKeyBlocker.SetTargetWindow(targetWindowHandle);
+                if (!arrowKeyBlocker.IsInstalled)
+                {
+                    if (arrowKeyBlocker.Install())
+                    {
+                        AddLog("方向鍵攔截已啟用");
+                    }
+                    else
+                    {
+                        AddLog("方向鍵攔截啟用失敗");
+                    }
+                }
+            }
+            else if (arrowKeyBlocker.IsInstalled)
+            {
+                arrowKeyBlocker.Uninstall();
+                AddLog("方向鍵攔截已停用");
+            }
+        }
+
+        private void ReleasePressedKeys()
+        {
+            if (pressedKeys.Count == 0)
+                return;
+
+            Keys[] keysToRelease = pressedKeys.ToArray();
+            pressedKeys.Clear();
+
+            foreach (var key in keysToRelease)
+            {
+                SendKeyEvent(new MacroEvent
+                {
+                    KeyCode = key,
+                    EventType = "up",
+                    Timestamp = 0
+                });
+            }
         }
 
         private void BtnStartRecording_Click(object sender, EventArgs e)
@@ -868,6 +964,10 @@ namespace MapleStoryMacro
 
             isPlaying = true;
 
+            UpdateArrowKeyBlockerState();
+
+            pressedKeys.Clear();
+
             // 重置自定義按鍵槽位的觸發狀態
             foreach (var slot in customKeySlots)
             {
@@ -900,8 +1000,10 @@ namespace MapleStoryMacro
             {
                 AddLog($"Playback failed: {ex.Message}");
                 MessageBox.Show($"Playback failed: {ex.Message}");
+                ReleasePressedKeys();
                 isPlaying = false;
                 statistics.EndSession();
+                UpdateArrowKeyBlockerState();
             }
 
             UpdateUI();
@@ -955,6 +1057,7 @@ namespace MapleStoryMacro
 
                 isPlaying = false;
                 statistics.EndSession();
+                UpdateArrowKeyBlockerState();
 
                 this.Invoke(new Action(() =>
         {
@@ -972,7 +1075,9 @@ namespace MapleStoryMacro
                   AddLog($"Playback error: {ex.Message}");
                   MessageBox.Show($"Playback error: {ex.Message}");
               }));
+                ReleasePressedKeys();
                 isPlaying = false;
+                UpdateArrowKeyBlockerState();
             }
         }
 
@@ -1080,7 +1185,13 @@ namespace MapleStoryMacro
                         SendAltKeyToWindow(targetWindowHandle, evt.KeyCode, evt.EventType == "down");
                         AddLog($"BG(Alt): {evt.KeyCode} ({evt.EventType})");
                     }
-                    // 對於方向鍵，使用 AttachThreadInput 方式
+                    // 對於方向鍵，根據設定的模式發送
+                    else if (IsArrowKey(evt.KeyCode))
+                    {
+                        SendArrowKeyWithMode(targetWindowHandle, evt.KeyCode, evt.EventType == "down");
+                        AddLog($"BG({currentArrowKeyMode}): {evt.KeyCode} ({evt.EventType})");
+                    }
+                    // 對於其他延伸鍵，使用線程附加模式
                     else if (IsExtendedKey(evt.KeyCode))
                     {
                         SendKeyWithThreadAttach(targetWindowHandle, evt.KeyCode, evt.EventType == "down");
@@ -1099,6 +1210,15 @@ namespace MapleStoryMacro
                     SendKeyForeground(evt.KeyCode, evt.EventType == "down");
                     AddLog($"FG: {evt.KeyCode} ({evt.EventType})");
                 }
+
+                if (evt.EventType == "down")
+                {
+                    pressedKeys.Add(evt.KeyCode);
+                }
+                else if (evt.EventType == "up")
+                {
+                    pressedKeys.Remove(evt.KeyCode);
+                }
             }
             catch (Exception ex)
             {
@@ -1107,17 +1227,87 @@ namespace MapleStoryMacro
         }
 
         /// <summary>
-        /// 檢查是否為 Alt 鍵
+        /// 檢查是否為方向鍵
         /// </summary>
-        private bool IsAltKey(Keys key)
+        private bool IsArrowKey(Keys key)
         {
-            return key == Keys.Alt || key == Keys.Menu || key == Keys.LMenu || key == Keys.RMenu;
+            return key == Keys.Left || key == Keys.Right || key == Keys.Up || key == Keys.Down;
         }
 
         /// <summary>
-        /// 使用 AttachThreadInput 方法發送方向鍵到背景視窗
+        /// 根據當前模式發送方向鍵
         /// </summary>
-        private void SendKeyWithThreadAttach(IntPtr hWnd, Keys key, bool isKeyDown)
+        private void SendArrowKeyWithMode(IntPtr hWnd, Keys key, bool isKeyDown)
+        {
+            switch (currentArrowKeyMode)
+            {
+                case ArrowKeyMode.ThreadAttach:
+                    SendKeyWithThreadAttach(hWnd, key, isKeyDown);
+                    break;
+
+                case ArrowKeyMode.SendToChild:
+                    SendArrowKeyToChildWindow(hWnd, key, isKeyDown);
+                    break;
+
+                case ArrowKeyMode.ThreadAttachWithBlocker:
+                    SendArrowKeyToChildWindow(hWnd, key, isKeyDown);
+                    SendKeyWithThreadAttach(hWnd, key, isKeyDown, KeyboardBlocker.MacroKeyMarker);
+                    break;
+
+                default:
+                    SendKeyWithThreadAttach(hWnd, key, isKeyDown);
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// 發送方向鍵到子視窗模式 - 純 PostMessage，不影響前景
+        /// </summary>
+        private void SendArrowKeyToChildWindow(IntPtr hWnd, Keys key, bool isKeyDown)
+        {
+            List<IntPtr> childWindows = new List<IntPtr>();
+
+            // 列舉所有子視窗
+            EnumChildWindows(hWnd, (childHwnd, lParam) =>
+            {
+                if (IsWindowVisible(childHwnd))
+                {
+                    childWindows.Add(childHwnd);
+                }
+                return true;
+            }, IntPtr.Zero);
+
+            // 構建 lParam
+            byte scanCode = GetScanCode(key);
+            uint lParamValue;
+            if (isKeyDown)
+            {
+                lParamValue = 1u | ((uint)scanCode << 16) | (1u << 24); // 延伸鍵旗標
+            }
+            else
+            {
+                lParamValue = 1u | ((uint)scanCode << 16) | (1u << 24) | (1u << 30) | (1u << 31);
+            }
+            IntPtr lParam = (IntPtr)lParamValue;
+            uint msg = isKeyDown ? WM_KEYDOWN : WM_KEYUP;
+
+            // 發送到所有可見的子視窗
+            foreach (IntPtr childHwnd in childWindows)
+            {
+                PostMessage(childHwnd, msg, (IntPtr)key, lParam);
+            }
+
+            // 一定也發送到主視窗（不再 fallback 到 ThreadAttach）
+            PostMessage(hWnd, msg, (IntPtr)key, lParam);
+            
+            // 額外使用 SendMessage 確保訊息被處理
+            SendMessage(hWnd, msg, (IntPtr)key, lParam);
+        }
+
+        /// <summary>
+        /// 使用 SendInput 發送方向鍵（更可靠但需要焦點）
+        /// </summary>
+        private void SendArrowKeyWithSendInput(IntPtr hWnd, Keys key, bool isKeyDown)
         {
             uint targetThreadId = GetWindowThreadProcessId(hWnd, out uint processId);
             uint currentThreadId = GetCurrentThreadId();
@@ -1135,6 +1325,63 @@ namespace MapleStoryMacro
                     SetFocus(hWnd);
                 }
 
+                INPUT[] inputs = new INPUT[1];
+                inputs[0].type = INPUT_KEYBOARD;
+                inputs[0].ki.wVk = (ushort)key;
+                inputs[0].ki.wScan = (ushort)GetScanCode(key);
+                inputs[0].ki.dwFlags = KEYEVENTF_EXTENDEDKEY;
+                if (!isKeyDown)
+                {
+                    inputs[0].ki.dwFlags |= KEYEVENTF_KEYUP;
+                }
+                inputs[0].ki.time = 0;
+                inputs[0].ki.dwExtraInfo = UIntPtr.Zero;
+
+                uint result = SendInput(1, inputs, Marshal.SizeOf(typeof(INPUT)));
+                if (result == 0)
+                {
+                    AddLog($"SendInput 失敗: {Marshal.GetLastWin32Error()}");
+                }
+            }
+            finally
+            {
+                if (attached && targetThreadId != currentThreadId)
+                {
+                    AttachThreadInput(currentThreadId, targetThreadId, false);
+                }
+            }
+        }
+
+        /// <summary>
+        /// 檢查是否為 Alt 鍵
+        /// </summary>
+        private bool IsAltKey(Keys key)
+        {
+            return key == Keys.Alt || key == Keys.Menu || key == Keys.LMenu || key == Keys.RMenu;
+        }
+
+        /// <summary>
+        /// 使用 AttachThreadInput 方法發送方向鍵到背景視窗
+        /// </summary>
+        private void SendKeyWithThreadAttach(IntPtr hWnd, Keys key, bool isKeyDown, UIntPtr? extraInfo = null)
+        {
+            uint targetThreadId = GetWindowThreadProcessId(hWnd, out uint processId);
+            uint currentThreadId = GetCurrentThreadId();
+
+            bool attached = false;
+            try
+            {
+                if (targetThreadId != currentThreadId)
+                {
+                    attached = AttachThreadInput(currentThreadId, targetThreadId, true);
+                }
+
+                if (attached)
+                {
+                    SetFocus(hWnd);
+                }
+
+
                 byte vkCode = (byte)key;
                 byte scanCode = GetScanCode(key);
 
@@ -1148,7 +1395,7 @@ namespace MapleStoryMacro
                     flags |= KEYEVENTF_EXTENDEDKEY;
                 }
 
-                keybd_event(vkCode, scanCode, flags, UIntPtr.Zero);
+                keybd_event(vkCode, scanCode, flags, extraInfo ?? UIntPtr.Zero);
             }
             finally
             {
@@ -1352,7 +1599,9 @@ namespace MapleStoryMacro
             {
                 statistics.EndSession();
             }
+            ReleasePressedKeys();
             isPlaying = false;
+            UpdateArrowKeyBlockerState();
             lblPlaybackStatus.Text = "Playback: Stopped";
             lblPlaybackStatus.ForeColor = Color.Orange;
             AddLog("播放已停止");
@@ -1371,6 +1620,7 @@ namespace MapleStoryMacro
 
             keyboardHook?.Uninstall();
             hotkeyHook?.Uninstall();  // 停止全局熱鍵監聽
+            arrowKeyBlocker?.Uninstall();
             monitorTimer?.Stop();
             schedulerTimer?.Stop();   // 停止定時執行計時器
             AddLog("應用程式已關閉");
@@ -1428,18 +1678,19 @@ namespace MapleStoryMacro
         {
             Form settingsForm = new Form
             {
-                Text = "熱鍵設定",
-                Width = 400,
-                Height = 250,
+                Text = "⚙ 熱鍵與進階設定",
+                Width = 450,
+                Height = 350,
                 StartPosition = FormStartPosition.CenterParent,
                 Owner = this,
                 FormBorderStyle = FormBorderStyle.FixedDialog,
                 MaximizeBox = false,
-                MinimizeBox = false
+                MinimizeBox = false,
+                BackColor = Color.FromArgb(45, 45, 48)
             };
 
             // 播放熱鍵
-            Label lblPlay = new Label { Text = "播放熱鍵：", Left = 20, Top = 30, Width = 100 };
+            Label lblPlay = new Label { Text = "播放熱鍵：", Left = 20, Top = 30, Width = 100, ForeColor = Color.White };
             TextBox txtPlay = new TextBox
             {
                 Left = 130,
@@ -1447,7 +1698,9 @@ namespace MapleStoryMacro
                 Width = 200,
                 ReadOnly = true,
                 Text = GetKeyDisplayName(playHotkey),
-                Tag = playHotkey
+                Tag = playHotkey,
+                BackColor = Color.FromArgb(60, 60, 65),
+                ForeColor = Color.White
             };
             txtPlay.KeyDown += (s, e) =>
             {
@@ -1456,8 +1709,9 @@ namespace MapleStoryMacro
                 txtPlay.Tag = e.KeyCode;
             };
 
+
             // 停止熱鍵
-            Label lblStop = new Label { Text = "停止熱鍵：", Left = 20, Top = 70, Width = 100 };
+            Label lblStop = new Label { Text = "停止熱鍵：", Left = 20, Top = 70, Width = 100, ForeColor = Color.White };
             TextBox txtStop = new TextBox
             {
                 Left = 130,
@@ -1465,7 +1719,9 @@ namespace MapleStoryMacro
                 Width = 200,
                 ReadOnly = true,
                 Text = GetKeyDisplayName(stopHotkey),
-                Tag = stopHotkey
+                Tag = stopHotkey,
+                BackColor = Color.FromArgb(60, 60, 65),
+                ForeColor = Color.White
             };
             txtStop.KeyDown += (s, e) =>
             {
@@ -1481,7 +1737,55 @@ namespace MapleStoryMacro
                 Left = 20,
                 Top = 110,
                 Width = 150,
-                Checked = hotkeyEnabled
+                Checked = hotkeyEnabled,
+                ForeColor = Color.White
+            };
+
+            // 方向鍵模式選擇
+            Label lblArrowMode = new Label
+            {
+                Text = "方向鍵模式：",
+                Left = 20,
+                Top = 150,
+                Width = 100,
+                ForeColor = Color.Cyan
+            };
+            ComboBox cmbArrowMode = new ComboBox
+            {
+                Left = 130,
+                Top = 147,
+                Width = 200,
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                BackColor = Color.FromArgb(60, 60, 65),
+                ForeColor = Color.White
+            };
+
+            // 方向鍵模式選項
+            var availableModes = new (ArrowKeyMode mode, string name)[]
+            {
+                (ArrowKeyMode.ThreadAttach, "ThreadAttach"),
+                (ArrowKeyMode.SendToChild, "SendToChild"),
+                (ArrowKeyMode.ThreadAttachWithBlocker, "ThreadAttach+Block")
+            };
+
+            foreach (var mode in availableModes)
+            {
+                cmbArrowMode.Items.Add(mode.name);
+            }
+
+            // 找到當前模式在列表中的索引
+            int currentIndex = Array.FindIndex(availableModes, m => m.mode == currentArrowKeyMode);
+            cmbArrowMode.SelectedIndex = currentIndex >= 0 ? currentIndex : 0;
+
+            // 方向鍵模式說明
+            Label lblArrowHint = new Label
+            {
+                Text = "⚠️ ThreadAttach/SendToChild 仍可能影響前景，Block 模式為嘗試避免",
+                Left = 20,
+                Top = 180,
+                Width = 400,
+                ForeColor = Color.Yellow,
+                Font = new Font("Microsoft JhengHei UI", 8F)
             };
 
             // 提示文字
@@ -1489,26 +1793,53 @@ namespace MapleStoryMacro
             {
                 Text = "提示：點擊文字框後按下想要的按鍵",
                 Left = 20,
-                Top = 140,
+                Top = 210,
                 Width = 350,
                 ForeColor = Color.Gray
             };
 
             // 按鈕
-            Button btnSave = new Button { Text = "儲存", Left = 130, Top = 170, Width = 80 };
-            Button btnCancel = new Button { Text = "取消", Left = 220, Top = 170, Width = 80 };
+            Button btnSave = new Button
+            {
+                Text = "儲存",
+                Left = 130,
+                Top = 250,
+                Width = 80,
+                Height = 30,
+                BackColor = Color.FromArgb(0, 122, 204),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
+            Button btnCancel = new Button
+            {
+                Text = "取消",
+                Left = 220,
+                Top = 250,
+                Width = 80,
+                Height = 30,
+                BackColor = Color.FromArgb(80, 80, 85),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
 
             btnSave.Click += (s, args) =>
             {
                 playHotkey = (Keys)txtPlay.Tag;
                 stopHotkey = (Keys)txtStop.Tag;
                 hotkeyEnabled = chkEnabled.Checked;
+                
+                // 從可用模式列表中取得實際的 enum 值
+                currentArrowKeyMode = availableModes[cmbArrowMode.SelectedIndex].mode;
+                UpdateArrowKeyBlockerState();
+
                 AddLog($"熱鍵設定已儲存：播放={GetKeyDisplayName(playHotkey)}, 停止={GetKeyDisplayName(stopHotkey)}, 啟用={hotkeyEnabled}");
+                AddLog($"方向鍵模式：{currentArrowKeyMode}");
                 MessageBox.Show(
-                    $"熱鍵設定已儲存！\n\n" +
+                    $"設定已儲存！\n\n" +
                     $"播放熱鍵：{GetKeyDisplayName(playHotkey)}\n" +
                     $"停止熱鍵：{GetKeyDisplayName(stopHotkey)}\n" +
-                    $"熱鍵狀態：{(hotkeyEnabled ? "已啟用" : "已停用")}",
+                    $"熱鍵狀態：{(hotkeyEnabled ? "已啟用" : "已停用")}\n" +
+                    $"方向鍵模式：{cmbArrowMode.SelectedItem}",
                     "設定完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 settingsForm.Close();
             };
@@ -1517,7 +1848,9 @@ namespace MapleStoryMacro
 
             settingsForm.Controls.AddRange(new Control[]
             {
-                lblPlay, txtPlay, lblStop, txtStop, chkEnabled, lblHint, btnSave, btnCancel
+                lblPlay, txtPlay, lblStop, txtStop, chkEnabled, 
+                lblArrowMode, cmbArrowMode, lblArrowHint,
+                lblHint, btnSave, btnCancel
             });
 
             settingsForm.ShowDialog();
@@ -1800,6 +2133,7 @@ namespace MapleStoryMacro
 
                 int enabledCount = customKeySlots.Count(s => s.Enabled && s.KeyCode != Keys.None);
                 AddLog($"自定義按鍵設定已儲存：{enabledCount} 個已啟用");
+                SaveSettings();
                 MessageBox.Show($"已儲存 {enabledCount} 個自定義按鍵設定！", "設定完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 customForm.Close();
             };
@@ -2052,7 +2386,12 @@ namespace MapleStoryMacro
         /// </summary>
         private void btnSaveSettings_Click(object sender, EventArgs e)
         {
-            SaveSettings();
+            ExportSettings();
+        }
+
+        private void btnImportSettings_Click(object sender, EventArgs e)
+        {
+            ImportSettings();
         }
 
         /// <summary>
@@ -2070,51 +2409,160 @@ namespace MapleStoryMacro
         {
             try
             {
-                var settings = new AppSettings
-                {
-                    PlayHotkey = playHotkey,
-                    StopHotkey = stopHotkey,
-                    HotkeyEnabled = hotkeyEnabled,
-                    WindowTitle = txtWindowTitle.Text,
-                    LoopCount = (int)numPlayTimes.Value
-                };
-
-                // 儲存自定義按鍵設定
-                for (int i = 0; i < 5; i++)
-                {
-                    settings.CustomKeySlots[i] = new CustomKeySlotData
-                    {
-                        SlotNumber = customKeySlots[i].SlotNumber,
-                        KeyCode = (int)customKeySlots[i].KeyCode,
-                        IntervalSeconds = customKeySlots[i].IntervalSeconds,
-                        Enabled = customKeySlots[i].Enabled,
-                        StartAtSecond = customKeySlots[i].StartAtSecond,
-                        PreDelaySeconds = customKeySlots[i].PreDelaySeconds,
-                        PauseScriptSeconds = customKeySlots[i].PauseScriptSeconds,
-                        PauseScriptEnabled = customKeySlots[i].PauseScriptEnabled
-                    };
-                }
-
-                // 確保目錄存在
-                string directory = Path.GetDirectoryName(SettingsFilePath);
-                if (!Directory.Exists(directory))
-                {
-                    Directory.CreateDirectory(directory);
-                }
-
-                // 序列化並儲存
-                string json = JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(SettingsFilePath, json);
-
-                AddLog("設定已儲存");
-                MessageBox.Show("設定已成功儲存！\n\n包含：\n• 熱鍵設定\n• 視窗標題\n• 循環次數\n• 自定義按鍵設定", 
-                    "儲存成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                SaveSettingsToFile(SettingsFilePath, "設定已儲存");
             }
             catch (Exception ex)
             {
                 AddLog($"設定儲存失敗: {ex.Message}");
                 MessageBox.Show($"儲存設定時發生錯誤：\n{ex.Message}", "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+
+        private void ExportSettings()
+        {
+            try
+            {
+                SaveFileDialog sfd = new SaveFileDialog
+                {
+                    Filter = "JSON 設定檔|*.json",
+                    DefaultExt = ".json",
+                    FileName = "MapleMacroSettings.json"
+                };
+
+                if (sfd.ShowDialog() != DialogResult.OK)
+                    return;
+
+                SaveSettingsToFile(sfd.FileName, "設定已導出");
+                MessageBox.Show("設定已成功導出！\n\n包含：\n• 熱鍵設定\n• 視窗標題\n• 循環次數\n• 自定義按鍵設定\n• 方向鍵模式",
+                    "導出成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                AddLog($"設定導出失敗: {ex.Message}");
+                MessageBox.Show($"導出設定時發生錯誤：\n{ex.Message}", "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void ImportSettings()
+        {
+            try
+            {
+                OpenFileDialog ofd = new OpenFileDialog
+                {
+                    Filter = "JSON 設定檔|*.json",
+                    Title = "匯入設定"
+                };
+
+                if (ofd.ShowDialog() != DialogResult.OK)
+                    return;
+
+                string json = File.ReadAllText(ofd.FileName);
+                var settings = JsonSerializer.Deserialize<AppSettings>(json);
+                if (settings == null)
+                    throw new InvalidOperationException("設定檔格式無效");
+
+                ApplySettings(settings);
+                SaveSettingsToFile(SettingsFilePath, "設定已匯入");
+
+                MessageBox.Show("設定已成功匯入！\n\n包含：\n• 熱鍵設定\n• 視窗標題\n• 循環次數\n• 自定義按鍵設定\n• 方向鍵模式",
+                    "匯入成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                AddLog($"設定匯入失敗: {ex.Message}");
+                MessageBox.Show($"匯入設定時發生錯誤：\n{ex.Message}", "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void SaveSettingsToFile(string filePath, string logMessage)
+        {
+            var settings = BuildSettings();
+
+            string directory = Path.GetDirectoryName(filePath);
+            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            string json = JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(filePath, json);
+
+            if (!string.IsNullOrEmpty(logMessage))
+            {
+                AddLog(logMessage);
+            }
+        }
+
+        private AppSettings BuildSettings()
+        {
+            var settings = new AppSettings
+            {
+                PlayHotkey = playHotkey,
+                StopHotkey = stopHotkey,
+                HotkeyEnabled = hotkeyEnabled,
+                WindowTitle = txtWindowTitle.Text,
+                LoopCount = (int)numPlayTimes.Value,
+                ArrowKeyMode = (int)currentArrowKeyMode
+            };
+
+            for (int i = 0; i < 5; i++)
+            {
+                settings.CustomKeySlots[i] = new CustomKeySlotData
+                {
+                    SlotNumber = customKeySlots[i].SlotNumber,
+                    KeyCode = (int)customKeySlots[i].KeyCode,
+                    IntervalSeconds = customKeySlots[i].IntervalSeconds,
+                    Enabled = customKeySlots[i].Enabled,
+                    StartAtSecond = customKeySlots[i].StartAtSecond,
+                    PreDelaySeconds = customKeySlots[i].PreDelaySeconds,
+                    PauseScriptSeconds = customKeySlots[i].PauseScriptSeconds,
+                    PauseScriptEnabled = customKeySlots[i].PauseScriptEnabled
+                };
+            }
+
+            return settings;
+        }
+
+        private void ApplySettings(AppSettings settings)
+        {
+            playHotkey = settings.PlayHotkey;
+            stopHotkey = settings.StopHotkey;
+            hotkeyEnabled = settings.HotkeyEnabled;
+            txtWindowTitle.Text = settings.WindowTitle;
+            numPlayTimes.Value = Math.Max(1, Math.Min(9999, settings.LoopCount));
+            currentArrowKeyMode = (ArrowKeyMode)settings.ArrowKeyMode;
+
+            if (settings.CustomKeySlots != null)
+            {
+                for (int i = 0; i < Math.Min(5, settings.CustomKeySlots.Length); i++)
+                {
+                    var data = settings.CustomKeySlots[i];
+                    if (data != null)
+                    {
+                        customKeySlots[i].SlotNumber = data.SlotNumber;
+                        customKeySlots[i].KeyCode = (Keys)data.KeyCode;
+                        customKeySlots[i].IntervalSeconds = data.IntervalSeconds;
+                        customKeySlots[i].Enabled = data.Enabled;
+                        customKeySlots[i].StartAtSecond = data.StartAtSecond;
+                        customKeySlots[i].PreDelaySeconds = data.PreDelaySeconds;
+                        customKeySlots[i].PauseScriptSeconds = data.PauseScriptSeconds;
+                        customKeySlots[i].PauseScriptEnabled = data.PauseScriptEnabled;
+                    }
+                }
+            }
+
+            AddLog("設定已載入");
+            AddLog($"熱鍵：播放={GetKeyDisplayName(playHotkey)}, 停止={GetKeyDisplayName(stopHotkey)}");
+            AddLog($"方向鍵模式：{currentArrowKeyMode}");
+
+            int enabledCount = customKeySlots.Count(s => s.Enabled && s.KeyCode != Keys.None);
+            if (enabledCount > 0)
+            {
+                AddLog($"自定義按鍵：{enabledCount} 個已啟用");
+            }
+
+            UpdateUI();
+            UpdateArrowKeyBlockerState();
         }
 
         /// <summary>
@@ -2135,40 +2583,7 @@ namespace MapleStoryMacro
 
                 if (settings != null)
                 {
-                    playHotkey = settings.PlayHotkey;
-                    stopHotkey = settings.StopHotkey;
-                    hotkeyEnabled = settings.HotkeyEnabled;
-                    txtWindowTitle.Text = settings.WindowTitle;
-                    numPlayTimes.Value = Math.Max(1, Math.Min(9999, settings.LoopCount));
-
-                    // 載入自定義按鍵設定
-                    if (settings.CustomKeySlots != null)
-                    {
-                        for (int i = 0; i < Math.Min(5, settings.CustomKeySlots.Length); i++)
-                        {
-                            var data = settings.CustomKeySlots[i];
-                            if (data != null)
-                            {
-                                customKeySlots[i].SlotNumber = data.SlotNumber;
-                                customKeySlots[i].KeyCode = (Keys)data.KeyCode;
-                                customKeySlots[i].IntervalSeconds = data.IntervalSeconds;
-                                customKeySlots[i].Enabled = data.Enabled;
-                                customKeySlots[i].StartAtSecond = data.StartAtSecond;
-                                customKeySlots[i].PreDelaySeconds = data.PreDelaySeconds;
-                                customKeySlots[i].PauseScriptSeconds = data.PauseScriptSeconds;
-                                customKeySlots[i].PauseScriptEnabled = data.PauseScriptEnabled;
-                            }
-                        }
-                    }
-
-                    AddLog("設定已載入");
-                    AddLog($"熱鍵：播放={GetKeyDisplayName(playHotkey)}, 停止={GetKeyDisplayName(stopHotkey)}");
-
-                    int enabledCount = customKeySlots.Count(s => s.Enabled && s.KeyCode != Keys.None);
-                    if (enabledCount > 0)
-                    {
-                        AddLog($"自定義按鍵：{enabledCount} 個已啟用");
-                    }
+                    ApplySettings(settings);
                 }
             }
             catch (Exception ex)
