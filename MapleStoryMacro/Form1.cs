@@ -130,7 +130,7 @@ namespace MapleStoryMacro
             SendToChild,        // 發送到子視窗模式（純背景，不影響前景）
             ThreadAttachWithBlocker // 線程附加 + 攔截前景
         }
-        private ArrowKeyMode currentArrowKeyMode = ArrowKeyMode.ThreadAttach;
+        private ArrowKeyMode currentArrowKeyMode = ArrowKeyMode.ThreadAttachWithBlocker;
 
         // SendInput structures - 正確的 64 位元結構體定義
         [StructLayout(LayoutKind.Sequential)]
@@ -1763,8 +1763,6 @@ namespace MapleStoryMacro
             // 方向鍵模式選項
             var availableModes = new (ArrowKeyMode mode, string name)[]
             {
-                (ArrowKeyMode.ThreadAttach, "ThreadAttach"),
-                (ArrowKeyMode.SendToChild, "SendToChild"),
                 (ArrowKeyMode.ThreadAttachWithBlocker, "ThreadAttach+Block")
             };
 
@@ -1780,7 +1778,7 @@ namespace MapleStoryMacro
             // 方向鍵模式說明
             Label lblArrowHint = new Label
             {
-                Text = "⚠️ ThreadAttach/SendToChild 仍可能影響前景，Block 模式為嘗試避免",
+                Text = "⚠️ 目前只提供 ThreadAttach+Block 模式",
                 Left = 20,
                 Top = 180,
                 Width = 400,
@@ -2531,6 +2529,10 @@ namespace MapleStoryMacro
             txtWindowTitle.Text = settings.WindowTitle;
             numPlayTimes.Value = Math.Max(1, Math.Min(9999, settings.LoopCount));
             currentArrowKeyMode = (ArrowKeyMode)settings.ArrowKeyMode;
+            if (currentArrowKeyMode != ArrowKeyMode.ThreadAttachWithBlocker)
+            {
+                currentArrowKeyMode = ArrowKeyMode.ThreadAttachWithBlocker;
+            }
 
             if (settings.CustomKeySlots != null)
             {

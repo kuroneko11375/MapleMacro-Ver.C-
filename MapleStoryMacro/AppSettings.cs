@@ -34,9 +34,9 @@ namespace MapleStoryMacro
         public int LoopCount { get; set; } = 1;
 
         /// <summary>
-        /// 方向鍵發送模式 (0=PostMessage, 1=ThreadAttach, 2=QuickFocus, 3=SendToChild)
+        /// 方向鍵發送模式
         /// </summary>
-        public int ArrowKeyMode { get; set; } = 1;
+        public int ArrowKeyMode { get; set; } = 2;
 
         /// <summary>
         /// 自定義按鍵槽位設定
