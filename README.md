@@ -22,7 +22,7 @@
 * **錄製與播放：** 採用全域鍵盤鉤子 (Keyboard Hook)，精確擷取按鍵動作與時間間隔。
 * **雙模式支援：**
 * **前景模式：** 透過 `keybd_event` 模擬真實物理按鍵。
-* **背景模式：** 透過 `PostMessage` 與執行緒掛鉤 (`AttachThreadInput`) 實現在遊戲非縮小時進行後台操作。
+* **背景模式：** 透過 PostMessage 與 AttachThreadInput 嘗試將鍵盤訊息發送至指定視窗（依目標程式實作而有差異）。
 
 * **JSON 腳本化：** 動作序列儲存為 JSON 格式，方便分享、載入或手動編輯按鍵數值。
 * **即時 Log 顯示：** 使用 GDI+ 在介面上繪製即時運作狀態，包含按鍵代碼與剩餘播放時間。
@@ -31,7 +31,7 @@
 ## 🛠️ 環境需求
 
 * **作業系統：** Windows 10 / 11
-* **執行架構：** [.NET Framework 8+](https://builds.dotnet.microsoft.com/dotnet/Runtime/8.0.23/dotnet-runtime-8.0.23-win-x64.exe)
+* **執行架構：** [ .NET 8 (Windows, WinForms)](https://builds.dotnet.microsoft.com/dotnet/Runtime/8.0.23/dotnet-runtime-8.0.23-win-x64.exe)
 * **權限要求：** **必須以系統管理員身分執行**（否則無法攔截與發送高權限視窗的按鍵訊息）。
 
 ## ⚠️ 需要注意 (Important)
@@ -65,7 +65,7 @@
 ## 📅 更新紀錄
 ### 2026/01/30 (v1.0.3)
 * 新增播放全局熱鍵
-* UI skin介面更動
+* UI SKIN介面更動
 * 介面說明改動
 * 按鈕布局更改
 
@@ -79,7 +79,7 @@
 
 * 正式轉換至 C# WinForms 框架。
 * 新增背景模式發送邏輯 (PostMessage)。
-* 新增 GDI+ 繪製的黑客風格即時日誌視窗。
+* 新增 GDI+ 繪製的黑客風格即時LOG視窗。
 * 優化掃描碼 (Scan Code) 映射，提高方向鍵觸發率。
 
 ## 🐛 已知限制
