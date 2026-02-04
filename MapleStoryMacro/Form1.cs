@@ -2291,14 +2291,34 @@ namespace MapleStoryMacro
                 row.Cells["PreDelay"].Value = customKeySlots[i].PreDelaySeconds;
             }
 
-            // 按鍵欄位的 KeyDown 事件處理
+            // 按鍵欄位的 KeyDown 事件處理 + 數字欄位驗證
             dgv.EditingControlShowing += (s, e) =>
             {
-                if (dgv.CurrentCell?.ColumnIndex == dgv.Columns["KeyCode"].Index && e.Control is TextBox tb)
+                if (dgv.CurrentCell == null || e.Control is not TextBox tb) return;
+
+                // 先移除所有之前的事件處理器
+                tb.KeyDown -= CustomKeyDgv_KeyDown;
+                tb.KeyPress -= NumericTextBox_KeyPress;
+
+                // 按鍵欄位 - 捕獲按鍵
+                if (dgv.CurrentCell.ColumnIndex == dgv.Columns["KeyCode"].Index)
                 {
-                    tb.KeyDown -= CustomKeyDgv_KeyDown;
                     tb.KeyDown += CustomKeyDgv_KeyDown;
                     tb.Tag = dgv.CurrentCell;
+                    tb.ReadOnly = true; // 防止直接輸入
+                }
+                // 數字欄位 - 只允許輸入數字和小數點
+                else if (dgv.CurrentCell.ColumnIndex == dgv.Columns["Interval"].Index ||
+                         dgv.CurrentCell.ColumnIndex == dgv.Columns["StartAt"].Index ||
+                         dgv.CurrentCell.ColumnIndex == dgv.Columns["PauseSeconds"].Index ||
+                         dgv.CurrentCell.ColumnIndex == dgv.Columns["PreDelay"].Index)
+                {
+                    tb.KeyPress += NumericTextBox_KeyPress;
+                    tb.ReadOnly = false; // 允許正常輸入
+                }
+                else
+                {
+                    tb.ReadOnly = false; // 其他欄位正常輸入
                 }
             };
 
@@ -2399,11 +2419,29 @@ namespace MapleStoryMacro
                     DataGridViewRow row = dgv.Rows[i];
                     customKeySlots[i].Enabled = Convert.ToBoolean(row.Cells["Enabled"].Value);
                     customKeySlots[i].KeyCode = row.Cells["KeyCode"].Tag as Keys? ?? Keys.None;
-                    customKeySlots[i].IntervalSeconds = Convert.ToDouble(row.Cells["Interval"].Value);
-                    customKeySlots[i].StartAtSecond = Convert.ToDouble(row.Cells["StartAt"].Value);
+                    
+                    // 數值驗證：確保是有效數字
+                    if (double.TryParse(row.Cells["Interval"].Value?.ToString(), out double interval))
+                        customKeySlots[i].IntervalSeconds = Math.Max(0.1, interval);
+                    else
+                        customKeySlots[i].IntervalSeconds = 30.0;
+                    
+                    if (double.TryParse(row.Cells["StartAt"].Value?.ToString(), out double startAt))
+                        customKeySlots[i].StartAtSecond = Math.Max(0, startAt);
+                    else
+                        customKeySlots[i].StartAtSecond = 0.0;
+                    
                     customKeySlots[i].PauseScriptEnabled = Convert.ToBoolean(row.Cells["PauseEnabled"].Value);
-                    customKeySlots[i].PauseScriptSeconds = Convert.ToDouble(row.Cells["PauseSeconds"].Value);
-                    customKeySlots[i].PreDelaySeconds = Convert.ToDouble(row.Cells["PreDelay"].Value);
+                    
+                    if (double.TryParse(row.Cells["PauseSeconds"].Value?.ToString(), out double pauseSec))
+                        customKeySlots[i].PauseScriptSeconds = Math.Max(0, pauseSec);
+                    else
+                        customKeySlots[i].PauseScriptSeconds = 3.0;
+                    
+                    if (double.TryParse(row.Cells["PreDelay"].Value?.ToString(), out double preDelay))
+                        customKeySlots[i].PreDelaySeconds = Math.Max(0, preDelay);
+                    else
+                        customKeySlots[i].PreDelaySeconds = 0.0;
                 }
 
                 int enabledCount = customKeySlots.Count(slot => slot.Enabled && slot.KeyCode != Keys.None);
@@ -2413,6 +2451,7 @@ namespace MapleStoryMacro
             catch (Exception ex)
             {
                 AddLog($"自定義按鍵儲存失敗: {ex.Message}");
+                MessageBox.Show($"儲存失敗：{ex.Message}\n\n請確認所有數字欄位填寫正確。", "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -2427,6 +2466,25 @@ namespace MapleStoryMacro
                 e.Handled = true;
                 tb.Text = GetKeyDisplayName(e.KeyCode);
                 cell.Tag = e.KeyCode;
+            }
+        }
+
+        /// <summary>
+        /// 數字文字框 KeyPress 事件 - 只允許數字和小數點
+        /// </summary>
+        private void NumericTextBox_KeyPress(object? sender, KeyPressEventArgs e)
+        {
+            // 允許數字、小數點、Backspace、Delete
+            if (!char.IsControl(e.KeyChar) && !char.IsDigit(e.KeyChar) && e.KeyChar != '.')
+            {
+                e.Handled = true;
+                return;
+            }
+
+            // 只允許一個小數點
+            if (e.KeyChar == '.' && sender is TextBox tb && tb.Text.Contains('.'))
+            {
+                e.Handled = true;
             }
         }
 
