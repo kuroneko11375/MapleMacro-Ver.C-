@@ -35,7 +35,7 @@ namespace MapleStoryMacro
         /// <summary>
         /// 自定義按鍵觸發次數
         /// </summary>
-        public int[] CustomKeyTriggerCounts { get; set; } = new int[5];
+        public int[] CustomKeyTriggerCounts { get; set; } = new int[15];
 
         /// <summary>
         /// 開始新的播放階段
@@ -44,7 +44,7 @@ namespace MapleStoryMacro
         {
             CurrentSessionStart = DateTime.Now;
             CurrentLoopCount = 0;
-            for (int i = 0; i < 5; i++)
+            for (int i = 0; i < 15; i++)
                 CustomKeyTriggerCounts[i] = 0;
         }
 
@@ -75,7 +75,7 @@ namespace MapleStoryMacro
         /// </summary>
         public void RecordCustomKeyTrigger(int slotIndex)
         {
-            if (slotIndex >= 0 && slotIndex < 5)
+            if (slotIndex >= 0 && slotIndex < 15)
                 CustomKeyTriggerCounts[slotIndex]++;
         }
 
@@ -106,7 +106,7 @@ namespace MapleStoryMacro
             LastPlayTime = null;
             CurrentSessionStart = null;
             CurrentLoopCount = 0;
-            CustomKeyTriggerCounts = new int[5];
+            CustomKeyTriggerCounts = new int[15];
         }
     }
 }

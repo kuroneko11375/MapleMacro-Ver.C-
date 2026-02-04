@@ -28,6 +28,7 @@ namespace MapleStoryMacro
         /// </summary>
         public string WindowTitle { get; set; } = "MapleStory";
 
+
         /// <summary>
         /// 循環次數
         /// </summary>
@@ -39,14 +40,19 @@ namespace MapleStoryMacro
         public int ArrowKeyMode { get; set; } = 2;
 
         /// <summary>
+        /// 背景切換模式
+        /// </summary>
+        public int BackgroundSwitchMode { get; set; } = 3; // 預設 1.0 秒
+
+        /// <summary>
         /// 自定義按鍵槽位設定
         /// </summary>
-        public CustomKeySlotData[] CustomKeySlots { get; set; } = new CustomKeySlotData[5];
+        public CustomKeySlotData[] CustomKeySlots { get; set; } = new CustomKeySlotData[15];
 
         public AppSettings()
         {
             // 初始化自定義按鍵槽位
-            for (int i = 0; i < 5; i++)
+            for (int i = 0; i < 15; i++)
             {
                 CustomKeySlots[i] = new CustomKeySlotData { SlotNumber = i + 1 };
             }

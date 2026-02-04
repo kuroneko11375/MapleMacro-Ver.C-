@@ -26,8 +26,9 @@ namespace MapleStoryMacro
         private bool hotkeyEnabled = true;      // 熱鍵是否啟用
         private KeyboardHookDLL hotkeyHook;     // 全局熱鍵監聽器
 
-        // 自定義按鍵槽位 (5個)
-        private CustomKeySlot[] customKeySlots = new CustomKeySlot[5];
+
+        // 自定義按鍵槽位 (15個)
+        private CustomKeySlot[] customKeySlots = new CustomKeySlot[15];
 
         // 執行統計
         private PlaybackStatistics statistics = new PlaybackStatistics();
@@ -38,15 +39,54 @@ namespace MapleStoryMacro
 
         // Log System
         private List<string> logMessages = new List<string>();
-        private readonly int MAX_LOG_LINES = 15;
+        private readonly int MAX_LOG_LINES = 100;
         private readonly object logLock = new object();
+        private string lastLogMessage = "";
+        private int lastLogRepeatCount = 0;
 
         private KeyboardBlocker arrowKeyBlocker = new KeyboardBlocker();
         private HashSet<Keys> pressedKeys = new HashSet<Keys>();
+        private readonly object pressedKeysLock = new object(); // 跨線程同步鎖
+
+        // 背景切換模式
+        private enum BackgroundSwitchMode
+        {
+            Manual,             // 手動切換（不自動）
+            Immediate,          // 立即切換到背景
+            ArrowKey_05s,       // 方向鍵 0.5 秒後切換
+            ArrowKey_10s,       // 方向鍵 1.0 秒後切換
+            ArrowKey_15s,       // 方向鍵 1.5 秒後切換
+            ArrowKey_20s,       // 方向鍵 2.0 秒後切換
+            ArrowKey_30s        // 方向鍵 3.0 秒後切換
+        }
+        private BackgroundSwitchMode currentBackgroundSwitchMode = BackgroundSwitchMode.ArrowKey_10s;
+
+        // 背景切換監控器
+        private System.Windows.Forms.Timer backgroundSwitchTimer;
+        private Keys? currentHeldArrowKey = null;      // 目前按住的方向鍵
+        private DateTime arrowKeyHeldStartTime;         // 開始按住的時間
+        private bool hasCompletedBackgroundSwitch = false; // 是否已完成背景切換
+
+        /// <summary>
+        /// 取得當前背景切換模式的閾值秒數
+        /// </summary>
+        private double GetBackgroundSwitchThreshold()
+        {
+            return currentBackgroundSwitchMode switch
+            {
+                BackgroundSwitchMode.ArrowKey_05s => 0.5,
+                BackgroundSwitchMode.ArrowKey_10s => 1.0,
+                BackgroundSwitchMode.ArrowKey_15s => 1.5,
+                BackgroundSwitchMode.ArrowKey_20s => 2.0,
+                BackgroundSwitchMode.ArrowKey_30s => 3.0,
+                _ => 1.0
+            };
+        }
 
         // Windows API P/Invoke
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool SetForegroundWindow(IntPtr hWnd);
+
 
         [DllImport("user32.dll")]
         private static extern bool IsWindow(IntPtr hWnd);
@@ -88,6 +128,37 @@ namespace MapleStoryMacro
 
         [DllImport("user32.dll")]
         private static extern IntPtr GetForegroundWindow();
+
+        // 視窗閃爍 API（用於通知使用者）
+        [DllImport("user32.dll")]
+        private static extern bool FlashWindowEx(ref FLASHWINFO pwfi);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct FLASHWINFO
+        {
+            public uint cbSize;
+            public IntPtr hwnd;
+            public uint dwFlags;
+            public uint uCount;
+            public uint dwTimeout;
+        }
+
+        private const uint FLASHW_ALL = 3;      // 閃爍標題列和工作列按鈕
+        private const uint FLASHW_TIMERNOFG = 12; // 持續閃爍直到視窗獲得焦點
+
+        /// <summary>
+        /// 閃爍視窗以提示使用者（不阻塞）
+        /// </summary>
+        private void FlashWindowEx(IntPtr hWnd)
+        {
+            FLASHWINFO fwi = new FLASHWINFO();
+            fwi.cbSize = (uint)Marshal.SizeOf(typeof(FLASHWINFO));
+            fwi.hwnd = hWnd;
+            fwi.dwFlags = FLASHW_ALL | FLASHW_TIMERNOFG;
+            fwi.uCount = 5;  // 閃爍 5 次
+            fwi.dwTimeout = 0;
+            FlashWindowEx(ref fwi);
+        }
 
         // 子視窗列舉相關 API
         [DllImport("user32.dll")]
@@ -269,7 +340,7 @@ namespace MapleStoryMacro
             InitializeComponent();
 
             // 初始化自定義按鍵槽位
-            for (int i = 0; i < 5; i++)
+            for (int i = 0; i < 15; i++)
             {
                 customKeySlots[i] = new CustomKeySlot { SlotNumber = i + 1 };
             }
@@ -278,6 +349,12 @@ namespace MapleStoryMacro
             schedulerTimer = new System.Windows.Forms.Timer();
             schedulerTimer.Interval = 1000; // 每秒檢查一次
             schedulerTimer.Tick += SchedulerTimer_Tick;
+
+            // 初始化背景切換監控器
+            // ★ 功能：播放時鎖定前景，方向鍵持續按住 1.5 秒後自動切到背景
+            backgroundSwitchTimer = new System.Windows.Forms.Timer();
+            backgroundSwitchTimer.Interval = 100; // 每 100ms 檢查一次
+            backgroundSwitchTimer.Tick += BackgroundSwitchTimer_Tick;
 
             // Bind all button events
             btnStartRecording.Click += BtnStartRecording_Click;
@@ -344,68 +421,286 @@ namespace MapleStoryMacro
             }
         }
 
+
+        /// <summary>
+        /// 背景切換監控器 - 根據設定模式監控
+        /// </summary>
+        private void BackgroundSwitchTimer_Tick(object sender, EventArgs e)
+        {
+            // 如果播放已停止或已完成背景切換，停止監控
+            if (!isPlaying)
+            {
+                StopBackgroundSwitch();
+                return;
+            }
+
+            if (hasCompletedBackgroundSwitch)
+            {
+                return; // 已完成，不需要繼續監控
+            }
+
+            // 手動模式不自動切換
+            if (currentBackgroundSwitchMode == BackgroundSwitchMode.Manual)
+            {
+                return;
+            }
+
+            // 檢查目前腳本中正在按住的方向鍵（使用 lock 保護跨線程存取）
+            Keys? heldArrowKey = null;
+            Keys[] currentKeys;
+            lock (pressedKeysLock)
+            {
+                currentKeys = pressedKeys.ToArray();
+            }
+            
+            foreach (var key in currentKeys)
+            {
+                if (IsArrowKey(key))
+                {
+                    heldArrowKey = key;
+                    break;
+                }
+            }
+
+            if (heldArrowKey.HasValue)
+            {
+                // 有方向鍵被按住
+                if (currentHeldArrowKey == heldArrowKey)
+                {
+                    // 同一個方向鍵持續按住，檢查時間
+                    double heldSeconds = (DateTime.Now - arrowKeyHeldStartTime).TotalSeconds;
+                    double threshold = GetBackgroundSwitchThreshold();
+                    
+                    if (heldSeconds >= threshold)
+                    {
+                        // 超過閾值，自動跳到背景！
+                        ExecuteBackgroundSwitch($"方向鍵 {GetKeyDisplayName(heldArrowKey.Value)} 持續 {heldSeconds:F1} 秒");
+                    }
+                }
+                else
+                {
+                    // 換了不同的方向鍵，重新計時
+                    currentHeldArrowKey = heldArrowKey;
+                    arrowKeyHeldStartTime = DateTime.Now;
+                }
+            }
+            else
+            {
+                // 沒有方向鍵被按住，重置狀態
+                currentHeldArrowKey = null;
+            }
+        }
+
+        /// <summary>
+        /// 執行背景切換
+        /// ★ 重點：不釋放按鍵！讓腳本繼續正常執行，跟手動切換視窗一樣
+        /// </summary>
+        private void ExecuteBackgroundSwitch(string reason)
+        {
+            hasCompletedBackgroundSwitch = true;
+            
+            // ★ 不要呼叫 ReleaseKeysToGameWindow()！
+            // 腳本會繼續發送按鍵，讓它自己管理按鍵狀態
+            // 這樣才能跟手動切換視窗一樣正常運作
+            
+            // 把本程式視窗帶到前景（讓遊戲變背景）
+            // 使用多種方法確保切換成功
+            BringWindowToTop(this.Handle);
+            SetForegroundWindow(this.Handle);
+            this.Activate();
+            
+            AddLog($"★ 背景切換完成: {reason}");
+            AddLog("遊戲已切換到背景，腳本繼續執行中...");
+            
+            // ★ 不使用 MessageBox 避免阻塞腳本執行
+            // 改用閃爍工作列圖示提醒使用者
+            FlashWindowEx(this.Handle);
+        }
+
+        /// <summary>
+        /// 釋放所有按鍵到遊戲視窗（專用於背景切換時）
+        /// ★ 直接發送 keyup 到遊戲視窗，不經過 SendKeyEvent
+        /// </summary>
+        private void ReleaseKeysToGameWindow()
+        {
+            Keys[] keysToRelease;
+            lock (pressedKeysLock)
+            {
+                if (pressedKeys.Count == 0)
+                    return;
+                keysToRelease = pressedKeys.ToArray();
+                pressedKeys.Clear();
+            }
+
+            AddLog($"釋放 {keysToRelease.Length} 個按鍵到遊戲視窗");
+
+            // 直接發送到目標視窗
+            if (targetWindowHandle != IntPtr.Zero && IsWindow(targetWindowHandle))
+            {
+                foreach (var key in keysToRelease)
+                {
+                    try
+                    {
+                        if (IsArrowKey(key))
+                        {
+                            SendArrowKeyWithMode(targetWindowHandle, key, false);
+                        }
+                        else if (IsAltKey(key))
+                        {
+                            SendAltKeyToWindow(targetWindowHandle, key, false);
+                        }
+                        else if (IsExtendedKey(key))
+                        {
+                            SendKeyWithThreadAttach(targetWindowHandle, key, false);
+                        }
+                        else
+                        {
+                            SendKeyToWindow(targetWindowHandle, key, false);
+                        }
+                        AddLog($"已釋放: {GetKeyDisplayName(key)}");
+                    }
+                    catch (Exception ex)
+                    {
+                        AddLog($"釋放按鍵失敗 {key}: {ex.Message}");
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// 開始背景切換監控 - 播放腳本時自動呼叫
+        /// </summary>
+        private void StartBackgroundSwitch()
+        {
+            if (targetWindowHandle == IntPtr.Zero || !IsWindow(targetWindowHandle))
+                return;
+
+            // 重置狀態
+            hasCompletedBackgroundSwitch = false;
+            currentHeldArrowKey = null;
+
+            // 根據模式決定行為
+            switch (currentBackgroundSwitchMode)
+            {
+                case BackgroundSwitchMode.Manual:
+                    // 手動模式：不做任何切換，直接開始播放
+                    AddLog("★ 手動模式 - 不自動切換背景");
+                    break;
+
+                case BackgroundSwitchMode.Immediate:
+                    // 立即切換：不鎖定前景，直接背景播放
+                    AddLog("★ 立即背景模式 - 直接在背景播放");
+                    hasCompletedBackgroundSwitch = true;
+                    break;
+
+                default:
+                    // 方向鍵模式：鎖定前景，等待觸發
+                    SetForegroundWindow(targetWindowHandle);
+                    double threshold = GetBackgroundSwitchThreshold();
+                    AddLog($"★ 前景模式啟動 - 等待方向鍵持續 {threshold} 秒後自動切到背景");
+                    backgroundSwitchTimer.Start();
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// 停止背景切換監控
+        /// </summary>
+        private void StopBackgroundSwitch()
+        {
+            backgroundSwitchTimer.Stop();
+            currentHeldArrowKey = null;
+            hasCompletedBackgroundSwitch = false;
+        }
+
         private void AddLog(string message)
         {
-            string timestamp = DateTime.Now.ToString("HH:mm:ss.fff");
-            string logEntry = $"[{timestamp}] {message}";
+            lock (logLock)
+            {
+                // 檢查是否與上一條訊息相同（合併重複訊息）
+                if (message == lastLogMessage && logMessages.Count > 0)
+                {
+                    lastLogRepeatCount++;
+                    // 更新最後一條訊息，加上重複次數
+                    string timestamp = DateTime.Now.ToString("HH:mm:ss.fff");
+                    logMessages[logMessages.Count - 1] = $"[{timestamp}] {message} x{lastLogRepeatCount}";
+                }
+                else
+                {
+                    // 新訊息
+                    lastLogMessage = message;
+                    lastLogRepeatCount = 1;
+                    string timestamp = DateTime.Now.ToString("HH:mm:ss.fff");
+                    string logEntry = $"[{timestamp}] {message}";
+                    logMessages.Add(logEntry);
+
+                    if (logMessages.Count > MAX_LOG_LINES)
+                        logMessages.RemoveAt(0);
+                }
+            }
+
+            // 更新日誌顯示（在 UI 執行緒）
+            if (txtLogDisplay != null && !txtLogDisplay.IsDisposed)
+            {
+                try
+                {
+                    if (txtLogDisplay.InvokeRequired)
+                    {
+                        txtLogDisplay.BeginInvoke(new Action(UpdateLogDisplay));
+                    }
+                    else
+                    {
+                        UpdateLogDisplay();
+                    }
+                }
+                catch { }
+            }
+        }
+
+        /// <summary>
+        /// 更新日誌顯示
+        /// </summary>
+        private void UpdateLogDisplay()
+        {
+            if (txtLogDisplay == null || txtLogDisplay.IsDisposed)
+                return;
 
             lock (logLock)
             {
-                logMessages.Add(logEntry);
-
-                if (logMessages.Count > MAX_LOG_LINES)
-                    logMessages.RemoveAt(0);
+                // 暫停繪製以提升效能
+                txtLogDisplay.BeginUpdate();
+                
+                // 如果項目數量不同，重新填充
+                if (txtLogDisplay.Items.Count != logMessages.Count)
+                {
+                    txtLogDisplay.Items.Clear();
+                    foreach (var msg in logMessages)
+                    {
+                        txtLogDisplay.Items.Add(msg);
+                    }
+                }
+                else if (logMessages.Count > 0)
+                {
+                    // 只更新最後一項（重複訊息時）
+                    txtLogDisplay.Items[txtLogDisplay.Items.Count - 1] = logMessages[logMessages.Count - 1];
+                }
+                
+                txtLogDisplay.EndUpdate();
+                
+                // 自動捲動到底部
+                if (txtLogDisplay.Items.Count > 0)
+                {
+                    txtLogDisplay.TopIndex = txtLogDisplay.Items.Count - 1;
+                }
             }
-
-            System.Diagnostics.Debug.WriteLine(logEntry);
         }
 
         private void MonitorTimer_Tick(object sender, EventArgs e)
         {
-            // Draw logs on picPreview
-            if (picPreview.Image != null)
-                picPreview.Image.Dispose();
-
-            Bitmap logBitmap = new Bitmap(picPreview.Width, picPreview.Height);
-            using (Graphics g = Graphics.FromImage(logBitmap))
-            {
-                g.Clear(Color.Black);
-
-                // Draw background
-                using (Brush brushBg = new SolidBrush(Color.FromArgb(20, 20, 20)))
-                {
-                    g.FillRectangle(brushBg, 0, 0, logBitmap.Width, logBitmap.Height);
-                }
-
-                // Draw log text
-                using (Font font = new Font("Consolas", 9, FontStyle.Regular))
-                using (Brush brushText = new SolidBrush(Color.LimeGreen))
-                {
-                    int yPos = 10;
-                    List<string> logsCopy;
-                    lock (logLock)
-                    {
-                        logsCopy = new List<string>(logMessages);
-                    }
-                    foreach (string log in logsCopy)
-                    {
-                        g.DrawString(log, font, brushText, 10, yPos);
-                        yPos += 12;
-                    }
-                }
-
-                // Draw status bar
-                using (Font fontBold = new Font("Consolas", 10, FontStyle.Bold))
-                using (Brush brushStatus = new SolidBrush(Color.Yellow))
-                {
-                    string bgMode = (targetWindowHandle != IntPtr.Zero) ? "BG" : "FG";
-                    string statusLine = $"Rec: {(isRecording ? "ON" : "OFF")} | Play: {(isPlaying ? "ON" : "OFF")} | Mode: {bgMode} | Events: {recordedEvents.Count}";
-
-                    g.DrawString(statusLine, fontBold, brushStatus, 10, logBitmap.Height - 30);
-                }
-            }
-
-            picPreview.Image = logBitmap;
+            // 更新狀態列
+            string bgMode = (targetWindowHandle != IntPtr.Zero) ? "BG" : "FG";
+            string statusLine = $"Rec: {(isRecording ? "ON" : "OFF")} | Play: {(isPlaying ? "ON" : "OFF")} | Mode: {bgMode} | Events: {recordedEvents.Count}";
+            lblStatus.Text = statusLine;
         }
 
         private void Form1_KeyDown(object sender, KeyEventArgs e)
@@ -485,11 +780,23 @@ namespace MapleStoryMacro
         {
             Form windowSelector = new Form
             {
-                Text = "Select Window",
-                Width = 400,
-                Height = 300,
+                Text = "選擇視窗 (雙擊快速選擇)",
+                Width = 450,
+                Height = 350,
                 StartPosition = FormStartPosition.CenterParent,
                 Owner = this
+            };
+
+            // 提示標籤
+            Label lblHint = new Label
+            {
+                Text = "★ 雙擊視窗名稱即可快速選擇",
+                Dock = DockStyle.Top,
+                Height = 25,
+                ForeColor = Color.Blue,
+                Font = new Font("Microsoft JhengHei UI", 9F, FontStyle.Bold),
+                TextAlign = ContentAlignment.MiddleCenter,
+                BackColor = Color.LightYellow
             };
 
             ListBox listBox = new ListBox
@@ -509,6 +816,23 @@ namespace MapleStoryMacro
                 }
                 catch { }
             }
+
+            // ★ 雙擊快速選擇
+            listBox.DoubleClick += (s, args) =>
+            {
+                if (listBox.SelectedIndex >= 0)
+                {
+                    ProcessItem selected = listBox.SelectedItem as ProcessItem;
+                    if (selected != null)
+                    {
+                        targetWindowHandle = selected.Handle;
+                        UpdateWindowStatus();
+                        AddLog($"★ 快速鎖定: {selected.Title}");
+                        AddLog("Background mode ENABLED");
+                        windowSelector.Close();
+                    }
+                }
+            };
 
             Panel btnPanel = new Panel
             {
@@ -539,7 +863,9 @@ namespace MapleStoryMacro
             btnPanel.Controls.Add(okBtn);
             btnPanel.Controls.Add(cancelBtn);
 
+            // 控制項加入順序：先 Fill，再 Top/Bottom
             windowSelector.Controls.Add(listBox);
+            windowSelector.Controls.Add(lblHint);
             windowSelector.Controls.Add(btnPanel);
 
             listBox.DisplayMember = "Title";
@@ -553,7 +879,6 @@ namespace MapleStoryMacro
                     UpdateWindowStatus();
                     AddLog($"Window locked: {selected.Title}");
                     AddLog("Background mode ENABLED");
-                    MessageBox.Show($"Selected: {selected.Title}\n\nBackground mode is now enabled!");
                 }
             }
         }
@@ -629,17 +954,23 @@ namespace MapleStoryMacro
             else if (arrowKeyBlocker.IsInstalled)
             {
                 arrowKeyBlocker.Uninstall();
-                AddLog("方向鍵攔截已停用");
+                // 解除攔截器時釋放所有按鍵到遊戲視窗
+                ReleaseKeysToGameWindow();
+                AddLog("方向鍵攔截已停用，已釋放所有按鍵");
             }
         }
 
         private void ReleasePressedKeys()
         {
-            if (pressedKeys.Count == 0)
-                return;
+            Keys[] keysToRelease;
+            lock (pressedKeysLock)
+            {
+                if (pressedKeys.Count == 0)
+                    return;
 
-            Keys[] keysToRelease = pressedKeys.ToArray();
-            pressedKeys.Clear();
+                keysToRelease = pressedKeys.ToArray();
+                pressedKeys.Clear();
+            }
 
             foreach (var key in keysToRelease)
             {
@@ -699,7 +1030,6 @@ namespace MapleStoryMacro
         {
             if (recordedEvents.Count == 0)
             {
-                MessageBox.Show("No events to save");
                 AddLog("No events to save");
                 return;
             }
@@ -717,12 +1047,10 @@ namespace MapleStoryMacro
                     string json = JsonSerializer.Serialize(recordedEvents, new JsonSerializerOptions { WriteIndented = true });
                     File.WriteAllText(sfd.FileName, json);
                     AddLog($"Saved: {Path.GetFileName(sfd.FileName)}");
-                    MessageBox.Show($"Saved to: {sfd.FileName}");
                 }
                 catch (Exception ex)
                 {
                     AddLog($"Save failed: {ex.Message}");
-                    MessageBox.Show($"Save failed: {ex.Message}");
                 }
             }
         }
@@ -743,15 +1071,11 @@ namespace MapleStoryMacro
                     recordedEvents = JsonSerializer.Deserialize<List<MacroEvent>>(json) ?? new List<MacroEvent>();
                     lblRecordingStatus.Text = $"已載入 | 事件數: {recordedEvents.Count}";
                     AddLog($"已載入: {recordedEvents.Count} 個事件");
-                    MessageBox.Show($"已載入 {recordedEvents.Count} 個事件", "載入成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
-
-                    // 更新 UI 狀態，啟用開始播放按鍵
                     UpdateUI();
                 }
                 catch (Exception ex)
                 {
                     AddLog($"載入失敗: {ex.Message}");
-                    MessageBox.Show($"載入失敗: {ex.Message}", "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
             }
         }
@@ -936,13 +1260,11 @@ namespace MapleStoryMacro
 
                   lblRecordingStatus.Text = $"已編輯 | 事件數: {recordedEvents.Count}";
                   AddLog($"已儲存編輯 - {recordedEvents.Count} 個事件");
-                  MessageBox.Show("變更已儲存");
                   editorForm.Close();
               }
               catch (Exception ex)
               {
                   AddLog($"儲存失敗: {ex.Message}");
-                  MessageBox.Show($"儲存失敗: {ex.Message}");
               }
           };
 
@@ -966,7 +1288,10 @@ namespace MapleStoryMacro
 
             UpdateArrowKeyBlockerState();
 
-            pressedKeys.Clear();
+            lock (pressedKeysLock)
+            {
+                pressedKeys.Clear();
+            }
 
             // 重置自定義按鍵槽位的觸發狀態
             foreach (var slot in customKeySlots)
@@ -979,6 +1304,12 @@ namespace MapleStoryMacro
 
             string mode = (targetWindowHandle != IntPtr.Zero) ? "Background" : "Foreground";
             AddLog($"Playback started ({mode} mode)...");
+
+            // 背景模式：啟動背景切換監控
+            if (targetWindowHandle != IntPtr.Zero && IsWindow(targetWindowHandle))
+            {
+                StartBackgroundSwitch();
+            }
 
             // 顯示啟用的自定義按鍵
             int enabledCount = customKeySlots.Count(s => s.Enabled);
@@ -1213,11 +1544,17 @@ namespace MapleStoryMacro
 
                 if (evt.EventType == "down")
                 {
-                    pressedKeys.Add(evt.KeyCode);
+                    lock (pressedKeysLock)
+                    {
+                        pressedKeys.Add(evt.KeyCode);
+                    }
                 }
                 else if (evt.EventType == "up")
                 {
-                    pressedKeys.Remove(evt.KeyCode);
+                    lock (pressedKeysLock)
+                    {
+                        pressedKeys.Remove(evt.KeyCode);
+                    }
                 }
             }
             catch (Exception ex)
@@ -1599,12 +1936,16 @@ namespace MapleStoryMacro
             {
                 statistics.EndSession();
             }
-            ReleasePressedKeys();
+            StopBackgroundSwitch();  // 停止背景切換監控
+            
+            // ★ 使用 ReleaseKeysToGameWindow 確保按鍵正確釋放到遊戲
+            ReleaseKeysToGameWindow();
+            
             isPlaying = false;
             UpdateArrowKeyBlockerState();
             lblPlaybackStatus.Text = "Playback: Stopped";
             lblPlaybackStatus.ForeColor = Color.Orange;
-            AddLog("播放已停止");
+            AddLog("播放已停止，已釋放所有按鍵");
             UpdateUI();
         }
 
@@ -1623,6 +1964,7 @@ namespace MapleStoryMacro
             arrowKeyBlocker?.Uninstall();
             monitorTimer?.Stop();
             schedulerTimer?.Stop();   // 停止定時執行計時器
+            backgroundSwitchTimer?.Stop();  // 停止背景切換監控器
             AddLog("應用程式已關閉");
         }
 
@@ -1679,8 +2021,8 @@ namespace MapleStoryMacro
             Form settingsForm = new Form
             {
                 Text = "⚙ 熱鍵與進階設定",
-                Width = 450,
-                Height = 350,
+                Width = 400,
+                Height = 320,
                 StartPosition = FormStartPosition.CenterParent,
                 Owner = this,
                 FormBorderStyle = FormBorderStyle.FixedDialog,
@@ -1689,12 +2031,14 @@ namespace MapleStoryMacro
                 BackColor = Color.FromArgb(45, 45, 48)
             };
 
+            int yPos = 25;
+
             // 播放熱鍵
-            Label lblPlay = new Label { Text = "播放熱鍵：", Left = 20, Top = 30, Width = 100, ForeColor = Color.White };
+            Label lblPlay = new Label { Text = "播放熱鍵：", Left = 20, Top = yPos, Width = 100, ForeColor = Color.White };
             TextBox txtPlay = new TextBox
             {
                 Left = 130,
-                Top = 27,
+                Top = yPos - 3,
                 Width = 200,
                 ReadOnly = true,
                 Text = GetKeyDisplayName(playHotkey),
@@ -1709,13 +2053,14 @@ namespace MapleStoryMacro
                 txtPlay.Tag = e.KeyCode;
             };
 
+            yPos += 35;
 
             // 停止熱鍵
-            Label lblStop = new Label { Text = "停止熱鍵：", Left = 20, Top = 70, Width = 100, ForeColor = Color.White };
+            Label lblStop = new Label { Text = "停止熱鍵：", Left = 20, Top = yPos, Width = 100, ForeColor = Color.White };
             TextBox txtStop = new TextBox
             {
                 Left = 130,
-                Top = 67,
+                Top = yPos - 3,
                 Width = 200,
                 ReadOnly = true,
                 Text = GetKeyDisplayName(stopHotkey),
@@ -1730,78 +2075,62 @@ namespace MapleStoryMacro
                 txtStop.Tag = e.KeyCode;
             };
 
+            yPos += 35;
+
             // 啟用熱鍵
             CheckBox chkEnabled = new CheckBox
             {
                 Text = "啟用全局熱鍵",
                 Left = 20,
-                Top = 110,
+                Top = yPos,
                 Width = 150,
                 Checked = hotkeyEnabled,
                 ForeColor = Color.White
             };
 
-            // 方向鍵模式選擇
+            yPos += 40;
+
+            // 方向鍵模式選擇（技術選項，通常不需要改）
             Label lblArrowMode = new Label
             {
-                Text = "方向鍵模式：",
+                Text = "方向鍵發送：",
                 Left = 20,
-                Top = 150,
+                Top = yPos,
                 Width = 100,
                 ForeColor = Color.Cyan
             };
             ComboBox cmbArrowMode = new ComboBox
             {
                 Left = 130,
-                Top = 147,
+                Top = yPos - 3,
                 Width = 200,
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 BackColor = Color.FromArgb(60, 60, 65),
                 ForeColor = Color.White
             };
+            cmbArrowMode.Items.Add("ThreadAttach+Block");
+            cmbArrowMode.SelectedIndex = 0;
 
-            // 方向鍵模式選項
-            var availableModes = new (ArrowKeyMode mode, string name)[]
-            {
-                (ArrowKeyMode.ThreadAttachWithBlocker, "ThreadAttach+Block")
-            };
-
-            foreach (var mode in availableModes)
-            {
-                cmbArrowMode.Items.Add(mode.name);
-            }
-
-            // 找到當前模式在列表中的索引
-            int currentIndex = Array.FindIndex(availableModes, m => m.mode == currentArrowKeyMode);
-            cmbArrowMode.SelectedIndex = currentIndex >= 0 ? currentIndex : 0;
-
-            // 方向鍵模式說明
-            Label lblArrowHint = new Label
-            {
-                Text = "⚠️ 目前只提供 ThreadAttach+Block 模式",
-                Left = 20,
-                Top = 180,
-                Width = 400,
-                ForeColor = Color.Yellow,
-                Font = new Font("Microsoft JhengHei UI", 8F)
-            };
+            yPos += 35;
 
             // 提示文字
             Label lblHint = new Label
             {
                 Text = "提示：點擊文字框後按下想要的按鍵",
                 Left = 20,
-                Top = 210,
+                Top = yPos,
                 Width = 350,
                 ForeColor = Color.Gray
             };
+
+            yPos += 35;
 
             // 按鈕
             Button btnSave = new Button
             {
                 Text = "儲存",
-                Left = 130,
-                Top = 250,
+                Left = 150,
+                Top = yPos,
                 Width = 80,
                 Height = 30,
                 BackColor = Color.FromArgb(0, 122, 204),
@@ -1811,8 +2140,8 @@ namespace MapleStoryMacro
             Button btnCancel = new Button
             {
                 Text = "取消",
-                Left = 220,
-                Top = 250,
+                Left = 240,
+                Top = yPos,
                 Width = 80,
                 Height = 30,
                 BackColor = Color.FromArgb(80, 80, 85),
@@ -1826,18 +2155,16 @@ namespace MapleStoryMacro
                 stopHotkey = (Keys)txtStop.Tag;
                 hotkeyEnabled = chkEnabled.Checked;
                 
-                // 從可用模式列表中取得實際的 enum 值
-                currentArrowKeyMode = availableModes[cmbArrowMode.SelectedIndex].mode;
                 UpdateArrowKeyBlockerState();
+                SaveSettings();
 
-                AddLog($"熱鍵設定已儲存：播放={GetKeyDisplayName(playHotkey)}, 停止={GetKeyDisplayName(stopHotkey)}, 啟用={hotkeyEnabled}");
-                AddLog($"方向鍵模式：{currentArrowKeyMode}");
+                AddLog($"熱鍵設定已儲存：播放={GetKeyDisplayName(playHotkey)}, 停止={GetKeyDisplayName(stopHotkey)}");
+                
                 MessageBox.Show(
                     $"設定已儲存！\n\n" +
                     $"播放熱鍵：{GetKeyDisplayName(playHotkey)}\n" +
                     $"停止熱鍵：{GetKeyDisplayName(stopHotkey)}\n" +
-                    $"熱鍵狀態：{(hotkeyEnabled ? "已啟用" : "已停用")}\n" +
-                    $"方向鍵模式：{cmbArrowMode.SelectedItem}",
+                    $"熱鍵狀態：{(hotkeyEnabled ? "已啟用" : "已停用")}",
                     "設定完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 settingsForm.Close();
             };
@@ -1846,8 +2173,8 @@ namespace MapleStoryMacro
 
             settingsForm.Controls.AddRange(new Control[]
             {
-                lblPlay, txtPlay, lblStop, txtStop, chkEnabled, 
-                lblArrowMode, cmbArrowMode, lblArrowHint,
+                lblPlay, txtPlay, lblStop, txtStop, chkEnabled,
+                lblArrowMode, cmbArrowMode,
                 lblHint, btnSave, btnCancel
             });
 
@@ -1855,261 +2182,180 @@ namespace MapleStoryMacro
         }
 
         /// <summary>
-        /// 開啟自定義按鍵設定視窗
+        /// 開啟自定義按鍵設定視窗（15 個槽位，使用 DataGridView）
         /// </summary>
         private void OpenCustomKeySettings()
         {
             Form customForm = new Form
             {
-                Text = "⚡ 自定義按鍵設定",
-                Width = 750,
-                Height = 500,
+                Text = "⚡ 自定義按鍵設定 (15 個槽位)",
+                Width = 700,
+                Height = 550,
                 StartPosition = FormStartPosition.CenterParent,
                 Owner = this,
-                FormBorderStyle = FormBorderStyle.FixedDialog,
-                MaximizeBox = false,
+                FormBorderStyle = FormBorderStyle.Sizable,
+                MaximizeBox = true,
                 MinimizeBox = false,
                 BackColor = Color.FromArgb(45, 45, 48)
             };
 
+            // 說明文字 (頂部)
             Label lblTitle = new Label
             {
-                Text = "設定最多 5 個自定義按鍵，在腳本播放時按間隔自動施放（觸發時可暫停腳本）",
-                Left = 20,
-                Top = 15,
-                Width = 700,
+                Text = "設定最多 15 個自定義按鍵，在腳本播放時按間隔自動施放",
+                Dock = DockStyle.Top,
+                Height = 30,
                 ForeColor = Color.LightGray,
+                Font = new Font("Microsoft JhengHei UI", 9F),
+                TextAlign = ContentAlignment.MiddleLeft,
+                Padding = new Padding(10, 0, 0, 0)
+            };
+
+            // DataGridView
+            DataGridView dgv = new DataGridView
+            {
+                Dock = DockStyle.Fill,
+                AllowUserToAddRows = false,
+                AllowUserToDeleteRows = false,
+                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+                BackgroundColor = Color.FromArgb(40, 40, 45),
+                BorderStyle = BorderStyle.None,
+                ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize,
+                DefaultCellStyle = new DataGridViewCellStyle
+                {
+                    BackColor = Color.FromArgb(50, 50, 55),
+                    ForeColor = Color.White,
+                    SelectionBackColor = Color.FromArgb(0, 122, 204),
+                    SelectionForeColor = Color.White
+                },
+                ColumnHeadersDefaultCellStyle = new DataGridViewCellStyle
+                {
+                    BackColor = Color.FromArgb(60, 60, 65),
+                    ForeColor = Color.White,
+                    Font = new Font("Microsoft JhengHei UI", 9F, FontStyle.Bold)
+                },
+                EnableHeadersVisualStyles = false,
+                GridColor = Color.FromArgb(70, 70, 75),
+                RowHeadersVisible = false,
+                SelectionMode = DataGridViewSelectionMode.CellSelect,
+                EditMode = DataGridViewEditMode.EditOnEnter
+            };
+
+            // 建立欄位
+            dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "Slot", HeaderText = "#", Width = 30, ReadOnly = true });
+            dgv.Columns.Add(new DataGridViewCheckBoxColumn { Name = "Enabled", HeaderText = "啟用", Width = 50 });
+            
+            // 按鍵欄位 - 使用 TextBox 並在 KeyDown 事件捕獲按鍵
+            DataGridViewTextBoxColumn keyColumn = new DataGridViewTextBoxColumn
+            {
+                Name = "KeyCode",
+                HeaderText = "按鍵 (點擊後按鍵)",
+                Width = 120
+            };
+            dgv.Columns.Add(keyColumn);
+            
+            dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "Interval", HeaderText = "間隔(秒)", Width = 70 });
+            dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "StartAt", HeaderText = "開始(秒)", Width = 70 });
+            dgv.Columns.Add(new DataGridViewCheckBoxColumn { Name = "PauseEnabled", HeaderText = "暫停", Width = 50 });
+            dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "PauseSeconds", HeaderText = "暫停(秒)", Width = 70 });
+            dgv.Columns.Add(new DataGridViewTextBoxColumn { Name = "PreDelay", HeaderText = "延遲(秒)", Width = 70 });
+            
+            // 清除按鈕欄位
+            DataGridViewButtonColumn clearColumn = new DataGridViewButtonColumn
+            {
+                Name = "Clear",
+                HeaderText = "清除",
+                Text = "×",
+                UseColumnTextForButtonValue = true,
+                Width = 45
+            };
+            dgv.Columns.Add(clearColumn);
+
+            // 填入資料
+            for (int i = 0; i < 15; i++)
+            {
+                int rowIndex = dgv.Rows.Add();
+                DataGridViewRow row = dgv.Rows[rowIndex];
+                row.Cells["Slot"].Value = $"{i + 1:D2}";
+                row.Cells["Enabled"].Value = customKeySlots[i].Enabled;
+                row.Cells["KeyCode"].Value = customKeySlots[i].KeyCode == Keys.None ? "(點擊)" : GetKeyDisplayName(customKeySlots[i].KeyCode);
+                row.Cells["KeyCode"].Tag = customKeySlots[i].KeyCode;
+                row.Cells["Interval"].Value = customKeySlots[i].IntervalSeconds;
+                row.Cells["StartAt"].Value = customKeySlots[i].StartAtSecond;
+                row.Cells["PauseEnabled"].Value = customKeySlots[i].PauseScriptEnabled;
+                row.Cells["PauseSeconds"].Value = customKeySlots[i].PauseScriptSeconds;
+                row.Cells["PreDelay"].Value = customKeySlots[i].PreDelaySeconds;
+            }
+
+            // 按鍵欄位的 KeyDown 事件處理
+            dgv.EditingControlShowing += (s, e) =>
+            {
+                if (dgv.CurrentCell?.ColumnIndex == dgv.Columns["KeyCode"].Index)
+                {
+                    TextBox tb = e.Control as TextBox;
+                    if (tb != null)
+                    {
+                        tb.KeyDown -= CustomKeyDgv_KeyDown;
+                        tb.KeyDown += CustomKeyDgv_KeyDown;
+                        tb.Tag = dgv.CurrentCell;
+                    }
+                }
+            };
+
+            // 清除按鈕點擊事件
+            dgv.CellClick += (s, e) =>
+            {
+                if (e.RowIndex >= 0 && e.ColumnIndex == dgv.Columns["Clear"].Index)
+                {
+                    DataGridViewRow row = dgv.Rows[e.RowIndex];
+                    row.Cells["Enabled"].Value = false;
+                    row.Cells["KeyCode"].Value = "(點擊)";
+                    row.Cells["KeyCode"].Tag = Keys.None;
+                    row.Cells["Interval"].Value = 30.0;
+                    row.Cells["StartAt"].Value = 0.0;
+                    row.Cells["PauseEnabled"].Value = true;
+                    row.Cells["PauseSeconds"].Value = 3.0;
+                    row.Cells["PreDelay"].Value = 0.0;
+                }
+            };
+
+            // 底部按鈕面板
+            Panel btnPanel = new Panel
+            {
+                Dock = DockStyle.Bottom,
+                Height = 60,
+                BackColor = Color.FromArgb(50, 50, 55)
+            };
+
+            Label lblHint = new Label
+            {
+                Text = "執行順序: 暫停腳本 → 按下按鍵 → 延遲等待 → 繼續腳本",
+                Left = 10,
+                Top = 5,
+                Width = 350,
+                ForeColor = Color.Yellow,
                 Font = new Font("Microsoft JhengHei UI", 9F)
             };
 
-            // 表頭
-            Label lblHeader1 = new Label { Text = "啟用", Left = 20, Top = 45, Width = 35, ForeColor = Color.White, Font = new Font("Microsoft JhengHei UI", 8F) };
-            Label lblHeader2 = new Label { Text = "按鍵", Left = 60, Top = 45, Width = 90, ForeColor = Color.White, Font = new Font("Microsoft JhengHei UI", 8F) };
-            Label lblHeader3 = new Label { Text = "間隔(秒)", Left = 155, Top = 45, Width = 55, ForeColor = Color.White, Font = new Font("Microsoft JhengHei UI", 8F) };
-            Label lblHeader4 = new Label { Text = "開始(秒)", Left = 215, Top = 45, Width = 55, ForeColor = Color.White, Font = new Font("Microsoft JhengHei UI", 8F) };
-            Label lblHeader5 = new Label { Text = "暫停", Left = 275, Top = 45, Width = 35, ForeColor = Color.Yellow, Font = new Font("Microsoft JhengHei UI", 8F) };
-            Label lblHeader6 = new Label { Text = "暫停(秒)", Left = 315, Top = 45, Width = 55, ForeColor = Color.Yellow, Font = new Font("Microsoft JhengHei UI", 8F) };
-            Label lblHeader7 = new Label { Text = "延遲(秒)", Left = 375, Top = 45, Width = 55, ForeColor = Color.Cyan, Font = new Font("Microsoft JhengHei UI", 8F) };
-
-            customForm.Controls.AddRange(new Control[] { lblTitle, lblHeader1, lblHeader2, lblHeader3, lblHeader4, lblHeader5, lblHeader6, lblHeader7 });
-
-            // 建立 5 個槽位的控制項
-            CheckBox[] chkEnabled = new CheckBox[5];
-            TextBox[] txtKeys = new TextBox[5];
-            NumericUpDown[] numIntervals = new NumericUpDown[5];
-            NumericUpDown[] numStartAt = new NumericUpDown[5];
-            CheckBox[] chkPause = new CheckBox[5];
-            NumericUpDown[] numPause = new NumericUpDown[5];
-            NumericUpDown[] numPreDelay = new NumericUpDown[5];
-
-            for (int i = 0; i < 5; i++)
-            {
-                int top = 70 + i * 45;
-                int slotIndex = i;
-
-                Label lblSlot = new Label
-                {
-                    Text = $"#{i + 1}",
-                    Left = 5,
-                    Top = top + 5,
-                    Width = 20,
-                    ForeColor = Color.Cyan,
-                    Font = new Font("Microsoft JhengHei UI", 9F, FontStyle.Bold)
-                };
-
-                chkEnabled[i] = new CheckBox
-                {
-                    Left = 30,
-                    Top = top + 3,
-                    Width = 20,
-                    Checked = customKeySlots[i].Enabled
-                };
-
-                txtKeys[i] = new TextBox
-                {
-                    Left = 60,
-                    Top = top,
-                    Width = 90,
-                    ReadOnly = true,
-                    Text = customKeySlots[i].KeyCode == Keys.None ? "(點擊)" : GetKeyDisplayName(customKeySlots[i].KeyCode),
-                    Tag = customKeySlots[i].KeyCode,
-                    BackColor = Color.FromArgb(60, 60, 65),
-                    ForeColor = Color.White,
-                    Font = new Font("Microsoft JhengHei UI", 8F)
-                };
-
-                int idx = i;
-                txtKeys[i].KeyDown += (s, e) =>
-                {
-                    e.SuppressKeyPress = true;
-                    txtKeys[idx].Text = GetKeyDisplayName(e.KeyCode);
-                    txtKeys[idx].Tag = e.KeyCode;
-                };
-
-                numIntervals[i] = new NumericUpDown
-                {
-                    Left = 155,
-                    Top = top,
-                    Width = 55,
-                    Minimum = 1,
-                    Maximum = 9999,
-                    DecimalPlaces = 0,
-                    Value = (decimal)customKeySlots[i].IntervalSeconds,
-                    BackColor = Color.FromArgb(60, 60, 65),
-                    ForeColor = Color.White
-                };
-
-                numStartAt[i] = new NumericUpDown
-                {
-                    Left = 215,
-                    Top = top,
-                    Width = 55,
-                    Minimum = 0,
-                    Maximum = 9999,
-                    DecimalPlaces = 0,
-                    Value = (decimal)customKeySlots[i].StartAtSecond,
-                    BackColor = Color.FromArgb(60, 60, 65),
-                    ForeColor = Color.White
-                };
-
-                // 新增：暫停腳本開關
-                chkPause[i] = new CheckBox
-                {
-                    Left = 280,
-                    Top = top + 3,
-                    Width = 20,
-                    Checked = customKeySlots[i].PauseScriptEnabled
-                };
-
-                // 新增：暫停時間
-                numPause[i] = new NumericUpDown
-                {
-                    Left = 315,
-                    Top = top,
-                    Width = 55,
-                    Minimum = 0,
-                    Maximum = 60,
-                    DecimalPlaces = 1,
-                    Value = (decimal)customKeySlots[i].PauseScriptSeconds,
-                    BackColor = Color.FromArgb(60, 60, 65),
-                    ForeColor = Color.Yellow
-                };
-
-                // 新增：觸發前延遲
-                numPreDelay[i] = new NumericUpDown
-                {
-                    Left = 375,
-                    Top = top,
-                    Width = 55,
-                    Minimum = 0,
-                    Maximum = 60,
-                    DecimalPlaces = 1,
-                    Value = (decimal)customKeySlots[i].PreDelaySeconds,
-                    BackColor = Color.FromArgb(60, 60, 65),
-                    ForeColor = Color.Cyan
-                };
-
-                // 清除按鈕
-                Button btnClear = new Button
-                {
-                    Text = "清除",
-                    Left = 440,
-                    Top = top,
-                    Width = 45,
-                    Height = 25,
-                    BackColor = Color.FromArgb(100, 60, 60),
-                    ForeColor = Color.White,
-                    FlatStyle = FlatStyle.Flat,
-                    Font = new Font("Microsoft JhengHei UI", 8F)
-                };
-                btnClear.Click += (s, e) =>
-                {
-                    txtKeys[slotIndex].Text = "(點擊)";
-                    txtKeys[slotIndex].Tag = Keys.None;
-                    chkEnabled[slotIndex].Checked = false;
-                    numIntervals[slotIndex].Value = 30;
-                    numStartAt[slotIndex].Value = 0;
-                    chkPause[slotIndex].Checked = true;
-                    numPause[slotIndex].Value = 3;
-                    numPreDelay[slotIndex].Value = 0;
-                };
-
-                customForm.Controls.AddRange(new Control[] { 
-                    lblSlot, chkEnabled[i], txtKeys[i], numIntervals[i], numStartAt[i], 
-                    chkPause[i], numPause[i], numPreDelay[i], btnClear 
-                });
-            }
-
-            // 說明區域 - 使用 Paint 事件繪製文字避免背景問題
-            Panel pnlHint = new Panel
-            {
-                Left = 20,
-                Top = 300,
-                Width = 700,
-                Height = 100,
-                BorderStyle = BorderStyle.FixedSingle,
-                BackColor = Color.FromArgb(45, 45, 48)
-            };
-
-            pnlHint.Paint += (sender, pe) =>
-            {
-                Graphics g = pe.Graphics;
-                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-
-                // 標題
-                using (Font fontBold = new Font("Microsoft JhengHei UI", 9F, FontStyle.Bold))
-                using (Brush brushWhite = new SolidBrush(Color.White))
-                {
-                    g.DrawString("[說明]", fontBold, brushWhite, 10, 5);
-                }
-
-                // 說明文字
-                using (Font fontNormal = new Font("Microsoft JhengHei UI", 8F))
-                using (Brush brushGray = new SolidBrush(Color.LightGray))
-                {
-                    string[] lines = {
-                        "  間隔: 每隔多少秒觸發一次",
-                        "  開始: 腳本播放幾秒後開始計算",
-                        "  暫停: 觸發時先暫停腳本指定秒數",
-                        "  延遲: 按下按鍵後等待幾秒才繼續腳本"
-                    };
-                    int y = 22;
-                    foreach (string line in lines)
-                    {
-                        g.DrawString(line, fontNormal, brushGray, 10, y);
-                        y += 14;
-                    }
-                }
-
-                // 執行順序
-                using (Font fontNormal = new Font("Microsoft JhengHei UI", 9F))
-                using (Brush brushYellow = new SolidBrush(Color.Yellow))
-                {
-                    g.DrawString("執行順序: 腳本暫停 -> 按下按鍵 -> 延遲等待 -> 繼續腳本", fontNormal, brushYellow, 320, 35);
-                }
-            };
-
-            customForm.Controls.Add(pnlHint);
-
-            // 按鈕
             Button btnSave = new Button
             {
-                Text = "儲存",
-                Left = 280,
-                Top = 415,
-                Width = 80,
+                Text = "✓ 儲存",
+                Left = 370,
+                Top = 15,
+                Width = 100,
                 Height = 35,
                 BackColor = Color.FromArgb(0, 122, 204),
                 ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Microsoft JhengHei UI", 9F, FontStyle.Bold)
             };
 
             Button btnCancel = new Button
             {
                 Text = "取消",
-                Left = 370,
-                Top = 415,
-                Width = 80,
+                Left = 480,
+                Top = 15,
+                Width = 100,
                 Height = 35,
                 BackColor = Color.FromArgb(80, 80, 85),
                 ForeColor = Color.White,
@@ -2118,28 +2364,71 @@ namespace MapleStoryMacro
 
             btnSave.Click += (s, args) =>
             {
-                for (int i = 0; i < 5; i++)
-                {
-                    customKeySlots[i].Enabled = chkEnabled[i].Checked;
-                    customKeySlots[i].KeyCode = (Keys)txtKeys[i].Tag;
-                    customKeySlots[i].IntervalSeconds = (double)numIntervals[i].Value;
-                    customKeySlots[i].StartAtSecond = (double)numStartAt[i].Value;
-                    customKeySlots[i].PauseScriptEnabled = chkPause[i].Checked;
-                    customKeySlots[i].PauseScriptSeconds = (double)numPause[i].Value;
-                    customKeySlots[i].PreDelaySeconds = (double)numPreDelay[i].Value;
-                }
-
-                int enabledCount = customKeySlots.Count(s => s.Enabled && s.KeyCode != Keys.None);
-                AddLog($"自定義按鍵設定已儲存：{enabledCount} 個已啟用");
-                SaveSettings();
-                MessageBox.Show($"已儲存 {enabledCount} 個自定義按鍵設定！", "設定完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                SaveCustomKeySettings(dgv);
                 customForm.Close();
             };
 
             btnCancel.Click += (s, args) => customForm.Close();
 
-            customForm.Controls.AddRange(new Control[] { btnSave, btnCancel });
+            // ★ 視窗關閉時自動儲存
+            customForm.FormClosing += (s, args) =>
+            {
+                SaveCustomKeySettings(dgv);
+            };
+
+            btnPanel.Controls.AddRange(new Control[] { lblHint, btnSave, btnCancel });
+
+            // 加入控制項（順序重要：先加底部，再加頂部，最後加 Fill）
+            customForm.Controls.Add(dgv);
+            customForm.Controls.Add(lblTitle);
+            customForm.Controls.Add(btnPanel);
+
             customForm.ShowDialog();
+        }
+
+
+        /// <summary>
+        /// 儲存自定義按鍵設定（從 DataGridView 讀取並儲存）
+        /// </summary>
+        private void SaveCustomKeySettings(DataGridView dgv)
+        {
+            try
+            {
+                for (int i = 0; i < 15; i++)
+                {
+                    DataGridViewRow row = dgv.Rows[i];
+                    customKeySlots[i].Enabled = Convert.ToBoolean(row.Cells["Enabled"].Value);
+                    customKeySlots[i].KeyCode = row.Cells["KeyCode"].Tag as Keys? ?? Keys.None;
+                    customKeySlots[i].IntervalSeconds = Convert.ToDouble(row.Cells["Interval"].Value);
+                    customKeySlots[i].StartAtSecond = Convert.ToDouble(row.Cells["StartAt"].Value);
+                    customKeySlots[i].PauseScriptEnabled = Convert.ToBoolean(row.Cells["PauseEnabled"].Value);
+                    customKeySlots[i].PauseScriptSeconds = Convert.ToDouble(row.Cells["PauseSeconds"].Value);
+                    customKeySlots[i].PreDelaySeconds = Convert.ToDouble(row.Cells["PreDelay"].Value);
+                }
+
+                int enabledCount = customKeySlots.Count(slot => slot.Enabled && slot.KeyCode != Keys.None);
+                AddLog($"自定義按鍵設定已儲存：{enabledCount} 個已啟用");
+                SaveSettings();
+            }
+            catch (Exception ex)
+            {
+                AddLog($"自定義按鍵儲存失敗: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 自定義按鍵 DataGridView 按鍵捕獲事件
+        /// </summary>
+        private void CustomKeyDgv_KeyDown(object sender, KeyEventArgs e)
+        {
+            TextBox tb = sender as TextBox;
+            if (tb != null && tb.Tag is DataGridViewCell cell)
+            {
+                e.SuppressKeyPress = true;
+                e.Handled = true;
+                tb.Text = GetKeyDisplayName(e.KeyCode);
+                cell.Tag = e.KeyCode;
+            }
         }
 
         /// <summary>
@@ -2309,7 +2598,7 @@ namespace MapleStoryMacro
 
             // 加入自定義按鍵統計
             string customKeyStats = "\n\n自定義按鍵觸發次數：";
-            for (int i = 0; i < 5; i++)
+            for (int i = 0; i < 15; i++)
             {
                 if (customKeySlots[i].Enabled && customKeySlots[i].KeyCode != Keys.None)
                 {
@@ -2354,11 +2643,6 @@ namespace MapleStoryMacro
             lblStatus.Text = "就緒：點擊「開始錄製」開始";
             lblRecordingStatus.Text = "錄製：尚未開始";
             lblPlaybackStatus.Text = "播放：尚未開始";
-        }
-
-        private void picPreview_Click(object sender, EventArgs e)
-        {
-            // picPreview 顯示即時日誌
         }
 
         [Serializable]
@@ -2500,10 +2784,11 @@ namespace MapleStoryMacro
                 HotkeyEnabled = hotkeyEnabled,
                 WindowTitle = txtWindowTitle.Text,
                 LoopCount = (int)numPlayTimes.Value,
-                ArrowKeyMode = (int)currentArrowKeyMode
+                ArrowKeyMode = (int)currentArrowKeyMode,
+                BackgroundSwitchMode = (int)currentBackgroundSwitchMode
             };
 
-            for (int i = 0; i < 5; i++)
+            for (int i = 0; i < 15; i++)
             {
                 settings.CustomKeySlots[i] = new CustomKeySlotData
                 {
@@ -2534,9 +2819,16 @@ namespace MapleStoryMacro
                 currentArrowKeyMode = ArrowKeyMode.ThreadAttachWithBlocker;
             }
 
+            // 載入背景切換模式
+            currentBackgroundSwitchMode = (BackgroundSwitchMode)settings.BackgroundSwitchMode;
+            if (!Enum.IsDefined(typeof(BackgroundSwitchMode), currentBackgroundSwitchMode))
+            {
+                currentBackgroundSwitchMode = BackgroundSwitchMode.ArrowKey_10s; // 預設 1.0 秒
+            }
+
             if (settings.CustomKeySlots != null)
             {
-                for (int i = 0; i < Math.Min(5, settings.CustomKeySlots.Length); i++)
+                for (int i = 0; i < Math.Min(15, settings.CustomKeySlots.Length); i++)
                 {
                     var data = settings.CustomKeySlots[i];
                     if (data != null)
@@ -2555,7 +2847,7 @@ namespace MapleStoryMacro
 
             AddLog("設定已載入");
             AddLog($"熱鍵：播放={GetKeyDisplayName(playHotkey)}, 停止={GetKeyDisplayName(stopHotkey)}");
-            AddLog($"方向鍵模式：{currentArrowKeyMode}");
+            AddLog($"背景切換模式：{currentBackgroundSwitchMode}");
 
             int enabledCount = customKeySlots.Count(s => s.Enabled && s.KeyCode != Keys.None);
             if (enabledCount > 0)
