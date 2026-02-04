@@ -12,7 +12,8 @@
 
 
 ## 專案介面
-<img width="602" height="612" alt="image" src="https://github.com/user-attachments/assets/c28709f8-09c4-4b6c-a5cb-04a5d485451c" />
+<img width="695" height="633" alt="image" src="https://github.com/user-attachments/assets/e7904429-1a58-4687-a352-22ef79ee2c8f" />
+
 
 
 
