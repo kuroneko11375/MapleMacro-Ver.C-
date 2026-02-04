@@ -3,22 +3,22 @@ using System;
 namespace MapleStoryMacro
 {
     /// <summary>
-    /// 執行統計資料
+    /// 播放統計類別
     /// </summary>
     public class PlaybackStatistics
     {
         /// <summary>
-        /// 總執行次數
+        /// 總播放次數
         /// </summary>
         public int TotalPlayCount { get; set; } = 0;
 
         /// <summary>
-        /// 總執行時長（秒）
+        /// 總播放時長（秒）
         /// </summary>
         public double TotalPlayTimeSeconds { get; set; } = 0;
 
         /// <summary>
-        /// 最後執行時間
+        /// 最後播放時間
         /// </summary>
         public DateTime? LastPlayTime { get; set; } = null;
 
@@ -28,12 +28,12 @@ namespace MapleStoryMacro
         public DateTime? CurrentSessionStart { get; set; } = null;
 
         /// <summary>
-        /// 本次執行的循環數
+        /// 本次播放的循環次數
         /// </summary>
         public int CurrentLoopCount { get; set; } = 0;
 
         /// <summary>
-        /// 自定義按鍵觸發次數
+        /// 自定義按鍵觸發次數 (15個槽位)
         /// </summary>
         public int[] CustomKeyTriggerCounts { get; set; } = new int[15];
 
@@ -86,14 +86,14 @@ namespace MapleStoryMacro
         {
             string lastPlay = LastPlayTime.HasValue
                 ? LastPlayTime.Value.ToString("yyyy-MM-dd HH:mm:ss")
-                : "從未執行";
+                : "從未播放";
 
             TimeSpan totalTime = TimeSpan.FromSeconds(TotalPlayTimeSeconds);
             string totalTimeStr = $"{(int)totalTime.TotalHours:D2}:{totalTime.Minutes:D2}:{totalTime.Seconds:D2}";
 
-            return $"總執行次數: {TotalPlayCount}\n" +
-                   $"總執行時長: {totalTimeStr}\n" +
-                   $"最後執行: {lastPlay}";
+            return $"總播放次數: {TotalPlayCount}\n" +
+                   $"總播放時長: {totalTimeStr}\n" +
+                   $"最後播放: {lastPlay}";
         }
 
         /// <summary>

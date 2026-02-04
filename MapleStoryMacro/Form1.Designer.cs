@@ -23,7 +23,10 @@ namespace MapleStoryMacro
             components = new System.ComponentModel.Container();
             txtWindowTitle = new HopeTextBox();
             lblStatus = new Label();
-            txtLogDisplay = new ListBox();
+            lstLog = new ListBox();
+            logContextMenu = new ContextMenuStrip(components);
+            menuCopyLog = new ToolStripMenuItem();
+            menuClearLog = new ToolStripMenuItem();
             monitorTimer = new System.Windows.Forms.Timer(components);
             btnStartRecording = new CyberButton();
             btnStopRecording = new CyberButton();
@@ -57,6 +60,7 @@ namespace MapleStoryMacro
             lblLoopCount = new Label();
             grpAdvanced = new CyberGroupBox();
             label5 = new Label();
+            logContextMenu.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)numPlayTimes).BeginInit();
             grpRecording.SuspendLayout();
             grpScript.SuspendLayout();
@@ -74,7 +78,7 @@ namespace MapleStoryMacro
             txtWindowTitle.Font = new Font("Segoe UI", 10F);
             txtWindowTitle.ForeColor = Color.FromArgb(48, 49, 51);
             txtWindowTitle.Hint = "";
-            txtWindowTitle.Location = new Point(19, 26);
+            txtWindowTitle.Location = new Point(19, 29);
             txtWindowTitle.MaxLength = 32767;
             txtWindowTitle.Multiline = false;
             txtWindowTitle.Name = "txtWindowTitle";
@@ -94,26 +98,43 @@ namespace MapleStoryMacro
             lblStatus.AutoSize = true;
             lblStatus.Font = new Font("Microsoft JhengHei UI", 9F);
             lblStatus.ForeColor = Color.White;
-            lblStatus.Location = new Point(20, 69);
+            lblStatus.Location = new Point(19, 75);
             lblStatus.Name = "lblStatus";
             lblStatus.Size = new Size(61, 15);
             lblStatus.TabIndex = 1;
             lblStatus.Text = "狀態: 就緒";
             // 
-            // txtLogDisplay
+            // lstLog
             // 
-            txtLogDisplay.BackColor = Color.FromArgb(20, 20, 25);
-            txtLogDisplay.BorderStyle = BorderStyle.FixedSingle;
-            txtLogDisplay.Font = new Font("Consolas", 9F);
-            txtLogDisplay.ForeColor = Color.LimeGreen;
-            txtLogDisplay.HorizontalScrollbar = true;
-            txtLogDisplay.ItemHeight = 14;
-            txtLogDisplay.Location = new Point(21, 95);
-            txtLogDisplay.Name = "txtLogDisplay";
-            txtLogDisplay.SelectionMode = SelectionMode.None;
-            txtLogDisplay.Size = new Size(633, 226);
-            txtLogDisplay.TabIndex = 1;
-            txtLogDisplay.TabStop = false;
+            lstLog.BackColor = Color.FromArgb(30, 30, 35);
+            lstLog.BorderStyle = BorderStyle.FixedSingle;
+            lstLog.ContextMenuStrip = logContextMenu;
+            lstLog.ForeColor = Color.LightGray;
+            lstLog.FormattingEnabled = true;
+            lstLog.ItemHeight = 15;
+            lstLog.Location = new Point(22, 96);
+            lstLog.Name = "lstLog";
+            lstLog.SelectionMode = SelectionMode.MultiExtended;
+            lstLog.Size = new Size(633, 227);
+            lstLog.TabIndex = 30;
+            // 
+            // logContextMenu
+            // 
+            logContextMenu.Items.AddRange(new ToolStripItem[] { menuCopyLog, menuClearLog });
+            logContextMenu.Name = "logContextMenu";
+            logContextMenu.Size = new Size(123, 48);
+            // 
+            // menuCopyLog
+            // 
+            menuCopyLog.Name = "menuCopyLog";
+            menuCopyLog.Size = new Size(122, 22);
+            menuCopyLog.Text = "複製選中";
+            // 
+            // menuClearLog
+            // 
+            menuClearLog.Name = "menuClearLog";
+            menuClearLog.Size = new Size(122, 22);
+            menuClearLog.Text = "清除日誌";
             // 
             // btnStartRecording
             // 
@@ -223,7 +244,7 @@ namespace MapleStoryMacro
             btnRefreshWindow.Lighting = false;
             btnRefreshWindow.LinearGradient_Background = false;
             btnRefreshWindow.LinearGradientPen = false;
-            btnRefreshWindow.Location = new Point(231, 27);
+            btnRefreshWindow.Location = new Point(231, 30);
             btnRefreshWindow.Name = "btnRefreshWindow";
             btnRefreshWindow.PenWidth = 15;
             btnRefreshWindow.Rounding = true;
@@ -263,7 +284,7 @@ namespace MapleStoryMacro
             btnLockWindow.Lighting = false;
             btnLockWindow.LinearGradient_Background = false;
             btnLockWindow.LinearGradientPen = false;
-            btnLockWindow.Location = new Point(339, 27);
+            btnLockWindow.Location = new Point(339, 30);
             btnLockWindow.Name = "btnLockWindow";
             btnLockWindow.PenWidth = 15;
             btnLockWindow.Rounding = true;
@@ -576,7 +597,7 @@ namespace MapleStoryMacro
             lblWindowStatus.AutoSize = true;
             lblWindowStatus.Font = new Font("Microsoft JhengHei UI", 9F);
             lblWindowStatus.ForeColor = Color.LightGray;
-            lblWindowStatus.Location = new Point(21, 519);
+            lblWindowStatus.Location = new Point(19, 521);
             lblWindowStatus.Name = "lblWindowStatus";
             lblWindowStatus.Size = new Size(106, 15);
             lblWindowStatus.TabIndex = 14;
@@ -587,7 +608,7 @@ namespace MapleStoryMacro
             lblRecordingStatus.AutoSize = true;
             lblRecordingStatus.Font = new Font("Microsoft JhengHei UI", 9F);
             lblRecordingStatus.ForeColor = Color.LightGray;
-            lblRecordingStatus.Location = new Point(21, 539);
+            lblRecordingStatus.Location = new Point(19, 541);
             lblRecordingStatus.Name = "lblRecordingStatus";
             lblRecordingStatus.Size = new Size(143, 15);
             lblRecordingStatus.TabIndex = 15;
@@ -598,7 +619,7 @@ namespace MapleStoryMacro
             lblPlaybackStatus.AutoSize = true;
             lblPlaybackStatus.Font = new Font("Microsoft JhengHei UI", 9F);
             lblPlaybackStatus.ForeColor = Color.LightGray;
-            lblPlaybackStatus.Location = new Point(21, 559);
+            lblPlaybackStatus.Location = new Point(19, 561);
             lblPlaybackStatus.Name = "lblPlaybackStatus";
             lblPlaybackStatus.Size = new Size(85, 15);
             lblPlaybackStatus.TabIndex = 16;
@@ -630,7 +651,7 @@ namespace MapleStoryMacro
             btnHotkeySettings.Lighting = false;
             btnHotkeySettings.LinearGradient_Background = false;
             btnHotkeySettings.LinearGradientPen = false;
-            btnHotkeySettings.Location = new Point(444, 27);
+            btnHotkeySettings.Location = new Point(444, 30);
             btnHotkeySettings.Name = "btnHotkeySettings";
             btnHotkeySettings.PenWidth = 15;
             btnHotkeySettings.Rounding = true;
@@ -791,7 +812,7 @@ namespace MapleStoryMacro
             btnSaveSettings.Lighting = false;
             btnSaveSettings.LinearGradient_Background = false;
             btnSaveSettings.LinearGradientPen = false;
-            btnSaveSettings.Location = new Point(560, 11);
+            btnSaveSettings.Location = new Point(556, 12);
             btnSaveSettings.Name = "btnSaveSettings";
             btnSaveSettings.PenWidth = 15;
             btnSaveSettings.Rounding = true;
@@ -832,7 +853,7 @@ namespace MapleStoryMacro
             btnImportSettings.Lighting = false;
             btnImportSettings.LinearGradient_Background = false;
             btnImportSettings.LinearGradientPen = false;
-            btnImportSettings.Location = new Point(560, 50);
+            btnImportSettings.Location = new Point(556, 51);
             btnImportSettings.Name = "btnImportSettings";
             btnImportSettings.PenWidth = 15;
             btnImportSettings.Rounding = true;
@@ -870,7 +891,7 @@ namespace MapleStoryMacro
             grpRecording.Lighting = false;
             grpRecording.LinearGradient_Background = false;
             grpRecording.LinearGradientPen = false;
-            grpRecording.Location = new Point(21, 339);
+            grpRecording.Location = new Point(19, 341);
             grpRecording.Name = "grpRecording";
             grpRecording.PenWidth = 15;
             grpRecording.RGB = false;
@@ -917,7 +938,7 @@ namespace MapleStoryMacro
             grpScript.Lighting = false;
             grpScript.LinearGradient_Background = false;
             grpScript.LinearGradientPen = false;
-            grpScript.Location = new Point(206, 339);
+            grpScript.Location = new Point(204, 341);
             grpScript.Name = "grpScript";
             grpScript.PenWidth = 15;
             grpScript.RGB = false;
@@ -963,7 +984,7 @@ namespace MapleStoryMacro
             grpEvents.Lighting = false;
             grpEvents.LinearGradient_Background = false;
             grpEvents.LinearGradientPen = false;
-            grpEvents.Location = new Point(451, 339);
+            grpEvents.Location = new Point(449, 341);
             grpEvents.Name = "grpEvents";
             grpEvents.PenWidth = 15;
             grpEvents.RGB = false;
@@ -1011,7 +1032,7 @@ namespace MapleStoryMacro
             grpPlayback.Lighting = false;
             grpPlayback.LinearGradient_Background = false;
             grpPlayback.LinearGradientPen = false;
-            grpPlayback.Location = new Point(21, 429);
+            grpPlayback.Location = new Point(19, 431);
             grpPlayback.Name = "grpPlayback";
             grpPlayback.PenWidth = 15;
             grpPlayback.RGB = false;
@@ -1069,7 +1090,7 @@ namespace MapleStoryMacro
             grpAdvanced.Lighting = false;
             grpAdvanced.LinearGradient_Background = false;
             grpAdvanced.LinearGradientPen = false;
-            grpAdvanced.Location = new Point(381, 429);
+            grpAdvanced.Location = new Point(379, 431);
             grpAdvanced.Name = "grpAdvanced";
             grpAdvanced.PenWidth = 15;
             grpAdvanced.RGB = false;
@@ -1098,9 +1119,9 @@ namespace MapleStoryMacro
             AutoScaleMode = AutoScaleMode.Font;
             BackColor = Color.FromArgb(30, 30, 35);
             ClientSize = new Size(676, 596);
+            Controls.Add(lstLog);
             Controls.Add(txtWindowTitle);
             Controls.Add(lblStatus);
-            Controls.Add(txtLogDisplay);
             Controls.Add(btnRefreshWindow);
             Controls.Add(btnImportSettings);
             Controls.Add(btnSaveSettings);
@@ -1118,8 +1139,9 @@ namespace MapleStoryMacro
             MaximizeBox = false;
             Name = "Form1";
             StartPosition = FormStartPosition.CenterScreen;
-            Text = "🍁MapleMacro";
+            Text = "MapleMacro";
             Load += Form1_Load;
+            logContextMenu.ResumeLayout(false);
             ((System.ComponentModel.ISupportInitialize)numPlayTimes).EndInit();
             grpRecording.ResumeLayout(false);
             grpRecording.PerformLayout();
@@ -1139,7 +1161,6 @@ namespace MapleStoryMacro
 
         private ReaLTaiizor.Controls.HopeTextBox txtWindowTitle;
         private System.Windows.Forms.Label lblStatus;
-        private System.Windows.Forms.ListBox txtLogDisplay;
         private System.Windows.Forms.Timer monitorTimer;
         
         public ReaLTaiizor.Controls.CyberButton btnStartRecording;
@@ -1177,5 +1198,11 @@ namespace MapleStoryMacro
         private Label label4;
         private Label label1;
         private Label label5;
+
+        // 日誌控制項
+        private System.Windows.Forms.ListBox lstLog;
+        private System.Windows.Forms.ContextMenuStrip logContextMenu;
+        private System.Windows.Forms.ToolStripMenuItem menuCopyLog;
+        private System.Windows.Forms.ToolStripMenuItem menuClearLog;
     }
 }

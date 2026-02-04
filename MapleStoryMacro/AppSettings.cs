@@ -45,7 +45,7 @@ namespace MapleStoryMacro
         public int BackgroundSwitchMode { get; set; } = 3; // 預設 1.0 秒
 
         /// <summary>
-        /// 自定義按鍵槽位設定
+        /// 自定義按鍵槽位設定 (15個)
         /// </summary>
         public CustomKeySlotData[] CustomKeySlots { get; set; } = new CustomKeySlotData[15];
 
@@ -70,7 +70,7 @@ namespace MapleStoryMacro
         public bool Enabled { get; set; } = false;
         public double StartAtSecond { get; set; } = 0;
         public double PreDelaySeconds { get; set; } = 0;
-        public double PauseScriptSeconds { get; set; } = 3.0;
-        public bool PauseScriptEnabled { get; set; } = true;
+        public double PauseScriptSeconds { get; set; } = 0;
+        public bool PauseScriptEnabled { get; set; } = false;
     }
 }
