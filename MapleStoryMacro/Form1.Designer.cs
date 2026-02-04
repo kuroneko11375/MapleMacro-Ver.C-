@@ -1118,6 +1118,7 @@ namespace MapleStoryMacro
             MaximizeBox = false;
             Name = "Form1";
             StartPosition = FormStartPosition.CenterScreen;
+            Text = "🍁MapleMacro";
             Load += Form1_Load;
             ((System.ComponentModel.ISupportInitialize)numPlayTimes).EndInit();
             grpRecording.ResumeLayout(false);

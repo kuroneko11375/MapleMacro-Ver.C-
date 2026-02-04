@@ -313,7 +313,7 @@ namespace MapleStoryMacro
         /// </summary>
         private static string GetKeyDisplayName(Keys key)
         {
-            if (KeyDisplayNames.TryGetValue(key, out string displayName))
+            if (KeyDisplayNames.TryGetValue(key, out var displayName) && displayName != null)
                 return displayName;
             return key.ToString();
         }
@@ -406,7 +406,7 @@ namespace MapleStoryMacro
         /// <summary>
         /// 定時執行檢查
         /// </summary>
-        private void SchedulerTimer_Tick(object sender, EventArgs e)
+        private void SchedulerTimer_Tick(object? sender, EventArgs e)
         {
             if (scheduledStartTime.HasValue && DateTime.Now >= scheduledStartTime.Value)
             {
@@ -416,7 +416,7 @@ namespace MapleStoryMacro
 
                 if (!isPlaying && recordedEvents.Count > 0)
                 {
-                    BtnStartPlayback_Click(null, null);
+                    BtnStartPlayback_Click(this, EventArgs.Empty);
                 }
             }
         }
@@ -425,7 +425,7 @@ namespace MapleStoryMacro
         /// <summary>
         /// 背景切換監控器 - 根據設定模式監控
         /// </summary>
-        private void BackgroundSwitchTimer_Tick(object sender, EventArgs e)
+        private void BackgroundSwitchTimer_Tick(object? sender, EventArgs e)
         {
             // 如果播放已停止或已完成背景切換，停止監控
             if (!isPlaying)
@@ -695,7 +695,7 @@ namespace MapleStoryMacro
             }
         }
 
-        private void MonitorTimer_Tick(object sender, EventArgs e)
+        private void MonitorTimer_Tick(object? sender, EventArgs e)
         {
             // 更新狀態列
             string bgMode = (targetWindowHandle != IntPtr.Zero) ? "BG" : "FG";
@@ -703,7 +703,7 @@ namespace MapleStoryMacro
             lblStatus.Text = statusLine;
         }
 
-        private void Form1_KeyDown(object sender, KeyEventArgs e)
+        private void Form1_KeyDown(object? sender, KeyEventArgs e)
         {
             if (isRecording)
             {
@@ -722,7 +722,7 @@ namespace MapleStoryMacro
             }
         }
 
-        private void Form1_KeyUp(object sender, KeyEventArgs e)
+        private void Form1_KeyUp(object? sender, KeyEventArgs e)
         {
             if (isRecording)
             {
@@ -763,14 +763,14 @@ namespace MapleStoryMacro
             }
         }
 
-        private void BtnRefreshWindow_Click(object sender, EventArgs e)
+        private void BtnRefreshWindow_Click(object? sender, EventArgs e)
         {
             AddLog("Searching for target window...");
             FindGameWindow();
             UpdateWindowStatus();
         }
 
-        private void BtnLockWindow_Click(object sender, EventArgs e)
+        private void BtnLockWindow_Click(object? sender, EventArgs e)
         {
             AddLog("Opening window selector...");
             SelectWindow();
@@ -822,8 +822,7 @@ namespace MapleStoryMacro
             {
                 if (listBox.SelectedIndex >= 0)
                 {
-                    ProcessItem selected = listBox.SelectedItem as ProcessItem;
-                    if (selected != null)
+                    if (listBox.SelectedItem is ProcessItem selected)
                     {
                         targetWindowHandle = selected.Handle;
                         UpdateWindowStatus();
@@ -872,8 +871,7 @@ namespace MapleStoryMacro
 
             if (windowSelector.ShowDialog() == DialogResult.OK && listBox.SelectedIndex >= 0)
             {
-                ProcessItem selected = listBox.SelectedItem as ProcessItem;
-                if (selected != null)
+                if (listBox.SelectedItem is ProcessItem selected)
                 {
                     targetWindowHandle = selected.Handle;
                     UpdateWindowStatus();
@@ -886,7 +884,7 @@ namespace MapleStoryMacro
         private class ProcessItem
         {
             public IntPtr Handle { get; set; }
-            public string Title { get; set; }
+            public string Title { get; set; } = string.Empty;
         }
 
         private void FindGameWindow()
@@ -983,7 +981,7 @@ namespace MapleStoryMacro
             }
         }
 
-        private void BtnStartRecording_Click(object sender, EventArgs e)
+        private void BtnStartRecording_Click(object? sender, EventArgs e)
         {
             if (isRecording) return;
 
@@ -1012,7 +1010,7 @@ namespace MapleStoryMacro
             UpdateUI();
         }
 
-        private void BtnStopRecording_Click(object sender, EventArgs e)
+        private void BtnStopRecording_Click(object? sender, EventArgs e)
         {
             if (!isRecording) return;
 
@@ -1026,7 +1024,7 @@ namespace MapleStoryMacro
             UpdateUI();
         }
 
-        private void BtnSaveScript_Click(object sender, EventArgs e)
+        private void BtnSaveScript_Click(object? sender, EventArgs e)
         {
             if (recordedEvents.Count == 0)
             {
@@ -1055,7 +1053,7 @@ namespace MapleStoryMacro
             }
         }
 
-        private void BtnLoadScript_Click(object sender, EventArgs e)
+        private void BtnLoadScript_Click(object? sender, EventArgs e)
         {
             OpenFileDialog ofd = new OpenFileDialog
             {
@@ -1080,7 +1078,7 @@ namespace MapleStoryMacro
             }
         }
 
-        private void BtnClearEvents_Click(object sender, EventArgs e)
+        private void BtnClearEvents_Click(object? sender, EventArgs e)
         {
             if (recordedEvents.Count == 0)
             {
@@ -1109,7 +1107,7 @@ namespace MapleStoryMacro
             }
         }
 
-        private void BtnViewEvents_Click(object sender, EventArgs e)
+        private void BtnViewEvents_Click(object? sender, EventArgs e)
         {
             if (recordedEvents.Count == 0)
             {
@@ -1149,7 +1147,7 @@ namespace MapleStoryMacro
             eventViewer.ShowDialog();
         }
 
-        private void BtnEditEvents_Click(object sender, EventArgs e)
+        private void BtnEditEvents_Click(object? sender, EventArgs e)
         {
             if (recordedEvents.Count == 0)
             {
@@ -1243,11 +1241,17 @@ namespace MapleStoryMacro
                   {
                       if (row.Cells[0].Value != null)
                       {
-                          string keyDisplayName = row.Cells[0].Value.ToString();
+                          string? keyDisplayName = row.Cells[0].Value?.ToString();
+                          if (string.IsNullOrWhiteSpace(keyDisplayName))
+                              continue;
+
                           Keys keyCode = ParseKeyFromDisplay(keyDisplayName);
-                          string eventTypeDisplay = row.Cells[1].Value.ToString();
+                          string eventTypeDisplay = row.Cells[1].Value?.ToString() ?? string.Empty;
                           string eventType = eventTypeDisplay == "按下" ? "down" : "up";
-                          double timestamp = double.Parse(row.Cells[2].Value.ToString());
+
+                          string? timestampText = row.Cells[2].Value?.ToString();
+                          if (!double.TryParse(timestampText, out double timestamp))
+                              continue;
 
                           recordedEvents.Add(new MacroEvent
                           {
@@ -1279,7 +1283,7 @@ namespace MapleStoryMacro
             editorForm.ShowDialog();
         }
 
-        private void BtnStartPlayback_Click(object sender, EventArgs e)
+        private void BtnStartPlayback_Click(object? sender, EventArgs e)
         {
             if (isPlaying || recordedEvents.Count == 0)
                 return;
@@ -1930,7 +1934,7 @@ namespace MapleStoryMacro
             }
         }
 
-        private void BtnStopPlayback_Click(object sender, EventArgs e)
+        private void BtnStopPlayback_Click(object? sender, EventArgs e)
         {
             if (isPlaying)
             {
@@ -1949,10 +1953,10 @@ namespace MapleStoryMacro
             UpdateUI();
         }
 
-        private void Form1_FormClosing(object sender, FormClosingEventArgs e)
+        private void Form1_FormClosing(object? sender, FormClosingEventArgs e)
         {
             if (isRecording)
-                BtnStopRecording_Click(null, null);
+                BtnStopRecording_Click(this, EventArgs.Empty);
             if (isPlaying)
             {
                 statistics.EndSession();
@@ -1985,7 +1989,7 @@ namespace MapleStoryMacro
                     if (!isPlaying && recordedEvents.Count > 0)
                     {
                         AddLog($"熱鍵觸發：開始播放 ({GetKeyDisplayName(playHotkey)})");
-                        BtnStartPlayback_Click(null, null);
+                        BtnStartPlayback_Click(this, EventArgs.Empty);
                     }
                 }));
             }
@@ -1997,7 +2001,7 @@ namespace MapleStoryMacro
                     if (isPlaying)
                     {
                         AddLog($"熱鍵觸發：停止播放 ({GetKeyDisplayName(stopHotkey)})");
-                        BtnStopPlayback_Click(null, null);
+                        BtnStopPlayback_Click(this, EventArgs.Empty);
                     }
                 }));
             }
@@ -2290,15 +2294,11 @@ namespace MapleStoryMacro
             // 按鍵欄位的 KeyDown 事件處理
             dgv.EditingControlShowing += (s, e) =>
             {
-                if (dgv.CurrentCell?.ColumnIndex == dgv.Columns["KeyCode"].Index)
+                if (dgv.CurrentCell?.ColumnIndex == dgv.Columns["KeyCode"].Index && e.Control is TextBox tb)
                 {
-                    TextBox tb = e.Control as TextBox;
-                    if (tb != null)
-                    {
-                        tb.KeyDown -= CustomKeyDgv_KeyDown;
-                        tb.KeyDown += CustomKeyDgv_KeyDown;
-                        tb.Tag = dgv.CurrentCell;
-                    }
+                    tb.KeyDown -= CustomKeyDgv_KeyDown;
+                    tb.KeyDown += CustomKeyDgv_KeyDown;
+                    tb.Tag = dgv.CurrentCell;
                 }
             };
 
@@ -2419,10 +2419,9 @@ namespace MapleStoryMacro
         /// <summary>
         /// 自定義按鍵 DataGridView 按鍵捕獲事件
         /// </summary>
-        private void CustomKeyDgv_KeyDown(object sender, KeyEventArgs e)
+        private void CustomKeyDgv_KeyDown(object? sender, KeyEventArgs e)
         {
-            TextBox tb = sender as TextBox;
-            if (tb != null && tb.Tag is DataGridViewCell cell)
+            if (sender is TextBox tb && tb.Tag is DataGridViewCell cell)
             {
                 e.SuppressKeyPress = true;
                 e.Handled = true;
@@ -2638,7 +2637,7 @@ namespace MapleStoryMacro
             return Environment.TickCount / 1000.0;
         }
 
-        private void Form1_Load(object sender, EventArgs e)
+        private void Form1_Load(object? sender, EventArgs e)
         {
             lblStatus.Text = "就緒：點擊「開始錄製」開始";
             lblRecordingStatus.Text = "錄製：尚未開始";
@@ -2649,16 +2648,16 @@ namespace MapleStoryMacro
         public class MacroEvent
         {
             public Keys KeyCode { get; set; }
-            public string EventType { get; set; }
+            public string EventType { get; set; } = string.Empty;
             public double Timestamp { get; set; }
         }
 
-        private void btnStartRecording_Click_1(object sender, EventArgs e)
+        private void btnStartRecording_Click_1(object? sender, EventArgs e)
         {
 
         }
 
-        private void btnCustomKeys_Click(object sender, EventArgs e)
+        private void btnCustomKeys_Click(object? sender, EventArgs e)
         {
 
         }
@@ -2666,12 +2665,12 @@ namespace MapleStoryMacro
         /// <summary>
         /// 儲存設定按鈕點擊事件
         /// </summary>
-        private void btnSaveSettings_Click(object sender, EventArgs e)
+        private void btnSaveSettings_Click(object? sender, EventArgs e)
         {
             ExportSettings();
         }
 
-        private void btnImportSettings_Click(object sender, EventArgs e)
+        private void btnImportSettings_Click(object? sender, EventArgs e)
         {
             ImportSettings();
         }
@@ -2760,7 +2759,7 @@ namespace MapleStoryMacro
         {
             var settings = BuildSettings();
 
-            string directory = Path.GetDirectoryName(filePath);
+            string? directory = Path.GetDirectoryName(filePath);
             if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
             {
                 Directory.CreateDirectory(directory);

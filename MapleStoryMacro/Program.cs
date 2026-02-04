@@ -48,7 +48,7 @@ namespace MapleStoryMacro
             {
                 var proc = new System.Diagnostics.ProcessStartInfo();
                 proc.UseShellExecute = true;
-                proc.FileName = System.Reflection.Assembly.GetExecutingAssembly().CodeBase;
+                proc.FileName = System.Reflection.Assembly.GetExecutingAssembly().Location;
                 proc.Verb = "runas";
                 System.Diagnostics.Process.Start(proc);
                 Environment.Exit(0);

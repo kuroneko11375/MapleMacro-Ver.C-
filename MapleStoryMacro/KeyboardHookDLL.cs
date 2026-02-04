@@ -37,14 +37,14 @@ namespace MapleStoryMacro
       // ===== 委託 =====
     public delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
         public delegate void KeyEventHandler(Keys keyCode, bool isKeyDown);
-        public event KeyEventHandler OnKeyEvent;
+        public event KeyEventHandler? OnKeyEvent;
 
    // ===== 成員變量 =====
         private IntPtr hookHandle = IntPtr.Zero;
-  private LowLevelKeyboardProc hookProc = null;
+  private LowLevelKeyboardProc? hookProc = null;
         private bool isHookInstalled = false;
-        private Task pollingTask = null;
-        private CancellationTokenSource cancellationTokenSource = null;
+        private Task? pollingTask = null;
+        private CancellationTokenSource? cancellationTokenSource = null;
  private Dictionary<int, bool> keyStates = new Dictionary<int, bool>();
     private readonly object lockObj = new object();
 
@@ -95,8 +95,15 @@ public bool Install()
     hookProc = HookCallback;
 
        using (Process curProcess = Process.GetCurrentProcess())
-   using (ProcessModule curModule = curProcess.MainModule)
+       using (ProcessModule? curModule = curProcess.MainModule)
                 {
+     if (curModule == null)
+     {
+         System.Diagnostics.Debug.WriteLine("?? 無法取得模組，改用 GetKeyState 輪詢");
+         StartKeyStatePolling();
+         return true;
+     }
+
      hookHandle = SetWindowsHookEx(
      WH_KEYBOARD_LL,
        hookProc,

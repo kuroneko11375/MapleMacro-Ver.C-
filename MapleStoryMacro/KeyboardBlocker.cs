@@ -108,8 +108,14 @@ namespace MapleStoryMacro
             try
             {
                 using (Process curProcess = Process.GetCurrentProcess())
-                using (ProcessModule curModule = curProcess.MainModule)
+                using (ProcessModule? curModule = curProcess.MainModule)
                 {
+                    if (curModule == null)
+                    {
+                        Debug.WriteLine("? 無法取得模組，攔截器安裝失敗");
+                        return false;
+                    }
+
                     hookHandle = SetWindowsHookEx(
                         WH_KEYBOARD_LL,
                         hookProc,
