@@ -339,10 +339,16 @@ namespace MapleStoryMacro
                 if (lastLogMessage == message)
                 {
                     lastLogRepeatCount++;
-                    // 更新最後一條日誌，顯示重複次數
-                    if (lstLog.Items.Count > 0)
+                    // 只在第一次重複和每 50 次時更新顯示
+                    if (lastLogRepeatCount == 1 || lastLogRepeatCount % 50 == 0)
                     {
-                        lstLog.Items[lstLog.Items.Count - 1] = $"[{timestamp}] {message} (×{lastLogRepeatCount + 1})";
+                        if (lstLog.Items.Count > 0)
+                        {
+                            lstLog.BeginUpdate();
+                            lstLog.Items[lstLog.Items.Count - 1] = $"[{timestamp}] {message} (×{lastLogRepeatCount + 1})";
+                            lstLog.EndUpdate();
+                            lstLog.TopIndex = lstLog.Items.Count - 1;
+                        }
                     }
                 }
                 else
@@ -351,6 +357,7 @@ namespace MapleStoryMacro
                     lastLogMessage = message;
                     lastLogRepeatCount = 0;
 
+                    lstLog.BeginUpdate();
                     string logEntry = $"[{timestamp}] {message}";
                     lstLog.Items.Add(logEntry);
 
@@ -359,6 +366,7 @@ namespace MapleStoryMacro
                     {
                         lstLog.Items.RemoveAt(0);
                     }
+                    lstLog.EndUpdate();
 
                     // 自動滾動到最新
                     lstLog.TopIndex = lstLog.Items.Count - 1;
@@ -391,8 +399,8 @@ namespace MapleStoryMacro
                     Timestamp = GetCurrentTime() - recordStartTime
                 });
 
-                lblRecordingStatus.Text = $"Recording: {recordedEvents.Count} events | Last: {e.KeyCode}";
-                AddLog($"KeyDown: {e.KeyCode}");
+                lblRecordingStatus.Text = $"錄製中: {recordedEvents.Count} 個事件 | 最後: {e.KeyCode}";
+                AddLog($"按鍵按下: {e.KeyCode}");
             }
         }
 
@@ -407,8 +415,8 @@ namespace MapleStoryMacro
                     Timestamp = GetCurrentTime() - recordStartTime
                 });
 
-                lblRecordingStatus.Text = $"Recording: {recordedEvents.Count} events | Last: {e.KeyCode}";
-                AddLog($"KeyUp: {e.KeyCode}");
+                lblRecordingStatus.Text = $"錄製中: {recordedEvents.Count} 個事件 | 最後: {e.KeyCode}";
+                AddLog($"按鍵放開: {e.KeyCode}");
             }
         }
 
@@ -428,25 +436,25 @@ namespace MapleStoryMacro
                     Timestamp = GetCurrentTime() - recordStartTime
                 });
 
-                lblRecordingStatus.Text = $"Recording: {recordedEvents.Count} events | Last: {keyCode}";
+                lblRecordingStatus.Text = $"錄製中: {recordedEvents.Count} 個事件 | 最後: {keyCode}";
 
                 if (isKeyDown)
-                    AddLog($"Hook Down: {keyCode}");
+                    AddLog($"鉤子按下: {keyCode}");
                 else
-                    AddLog($"Hook Up: {keyCode}");
+                    AddLog($"鉤子放開: {keyCode}");
             }
         }
 
         private void BtnRefreshWindow_Click(object sender, EventArgs e)
         {
-            AddLog("Searching for target window...");
+            AddLog("正在搜尋目標視窗...");
             FindGameWindow();
             UpdateWindowStatus();
         }
 
         private void BtnLockWindow_Click(object sender, EventArgs e)
         {
-            AddLog("Opening window selector...");
+            AddLog("正在開啟視窗選擇器...");
             SelectWindow();
         }
 
@@ -586,16 +594,16 @@ namespace MapleStoryMacro
         {
             if (targetWindowHandle != IntPtr.Zero && IsWindow(targetWindowHandle))
             {
-                lblWindowStatus.Text = $"Window: Locked - BG Mode ON";
+                lblWindowStatus.Text = $"視窗: 已鎖定 - 背景模式";
                 lblWindowStatus.ForeColor = Color.Green;
-                AddLog($"Window locked: {targetWindowHandle}");
+                AddLog($"已鎖定視窗: {targetWindowHandle}");
             }
             else
             {
-                lblWindowStatus.Text = "Window: Not found - FG Mode";
+                lblWindowStatus.Text = "視窗: 未找到 - 前景模式";
                 lblWindowStatus.ForeColor = Color.Red;
                 targetWindowHandle = IntPtr.Zero;
-                AddLog("Target window not found");
+                AddLog("未找到目標視窗");
             }
 
         }
@@ -627,20 +635,20 @@ namespace MapleStoryMacro
             recordStartTime = 0;
             isRecording = true;
 
-            lblRecordingStatus.Text = "Recording...";
+            lblRecordingStatus.Text = "錄製中...";
             lblRecordingStatus.ForeColor = Color.Red;
-            lblStatus.Text = "Press keys to record";
+            lblStatus.Text = "按下按鍵以錄製";
 
-            AddLog("Recording started...");
+            AddLog("錄製已開始");
 
             if (keyboardHook.Install())
             {
-                AddLog("Keyboard hook activated");
+                AddLog("鍵盤鉤子已啟動");
             }
             else
             {
-                AddLog("Keyboard hook failed");
-                MessageBox.Show("Failed to start keyboard hook");
+                AddLog("鍵盤鉤子啟動失敗");
+                MessageBox.Show("鍵盤鉤子啟動失敗");
                 isRecording = false;
                 return;
             }
@@ -653,12 +661,12 @@ namespace MapleStoryMacro
             if (!isRecording) return;
 
             isRecording = false;
-            lblRecordingStatus.Text = $"Stopped | Events: {recordedEvents.Count}";
+            lblRecordingStatus.Text = $"已停止 | 事件數: {recordedEvents.Count}";
             lblRecordingStatus.ForeColor = Color.Green;
 
             keyboardHook.Uninstall();
 
-            AddLog($"Recording stopped - Total: {recordedEvents.Count} events");
+            AddLog($"錄製已停止 - 共 {recordedEvents.Count} 個事件");
             UpdateUI();
         }
 
@@ -988,8 +996,8 @@ namespace MapleStoryMacro
             // 開始統計
             statistics.StartSession();
 
-            string mode = (targetWindowHandle != IntPtr.Zero) ? "Background" : "Foreground";
-            AddLog($"Playback started ({mode} mode)...");
+            string mode = (targetWindowHandle != IntPtr.Zero) ? "背景" : "前景";
+            AddLog($"播放開始 ({mode}模式)...");
 
             // 顯示啟用的自定義按鍵
             int enabledCount = customKeySlots.Count(s => s.Enabled);
@@ -1009,7 +1017,7 @@ namespace MapleStoryMacro
             }
             catch (Exception ex)
             {
-                AddLog($"❌ Playback failed: {ex.Message}");
+                AddLog($"❌ 播放失敗: {ex.Message}");
                 ReleasePressedKeys();
                 isPlaying = false;
                 statistics.EndSession();
@@ -1028,7 +1036,7 @@ namespace MapleStoryMacro
 
                     this.Invoke(new Action(() =>
                     {
-                        lblPlaybackStatus.Text = $"Loop: {loop}/{loopCount}";
+                        lblPlaybackStatus.Text = $"循環: {loop}/{loopCount}";
                         lblPlaybackStatus.ForeColor = Color.Blue;
                     }));
 
@@ -1069,9 +1077,9 @@ namespace MapleStoryMacro
 
                 this.Invoke(new Action(() =>
                 {
-                    lblPlaybackStatus.Text = "Playback: Completed";
+                    lblPlaybackStatus.Text = "播放: 已完成";
                     lblPlaybackStatus.ForeColor = Color.Green;
-                    AddLog($"Playback completed - 循環: {statistics.CurrentLoopCount}");
+                    AddLog($"播放完成 - 循環: {statistics.CurrentLoopCount}");
                     UpdateUI();
                 }));
             }
@@ -1080,7 +1088,7 @@ namespace MapleStoryMacro
                 statistics.EndSession();
                 this.Invoke(new Action(() =>
                 {
-                    AddLog($"❌ Playback error: {ex.Message}");
+                    AddLog($"❌ 播放錯誤: {ex.Message}");
                 }));
                 ReleasePressedKeys();
                 isPlaying = false;
@@ -1189,32 +1197,32 @@ namespace MapleStoryMacro
                     if (IsAltKey(evt.KeyCode))
                     {
                         SendAltKeyToWindow(targetWindowHandle, evt.KeyCode, evt.EventType == "down");
-                        AddLog($"BG(Alt): {evt.KeyCode} ({evt.EventType})");
+                        AddLog($"背景(Alt): {evt.KeyCode} ({evt.EventType})");
                     }
                     // 對於方向鍵，根據設定的模式發送
                     else if (IsArrowKey(evt.KeyCode))
                     {
                         SendArrowKeyWithMode(targetWindowHandle, evt.KeyCode, evt.EventType == "down");
-                        AddLog($"BG({currentArrowKeyMode}): {evt.KeyCode} ({evt.EventType})");
+                        AddLog($"背景({currentArrowKeyMode}): {evt.KeyCode} ({evt.EventType})");
                     }
                     // 對於其他延伸鍵，使用線程附加模式
                     else if (IsExtendedKey(evt.KeyCode))
                     {
                         SendKeyWithThreadAttach(targetWindowHandle, evt.KeyCode, evt.EventType == "down");
-                        AddLog($"BG(Attach): {evt.KeyCode} ({evt.EventType})");
+                        AddLog($"背景(附加): {evt.KeyCode} ({evt.EventType})");
                     }
                     else
                     {
                         // 一般按鍵：使用背景模式
                         SendKeyToWindow(targetWindowHandle, evt.KeyCode, evt.EventType == "down");
-                        AddLog($"BG: {evt.KeyCode} ({evt.EventType})");
+                        AddLog($"背景: {evt.KeyCode} ({evt.EventType})");
                     }
                 }
                 else
                 {
                     // Foreground key sending using keybd_event
                     SendKeyForeground(evt.KeyCode, evt.EventType == "down");
-                    AddLog($"FG: {evt.KeyCode} ({evt.EventType})");
+                    AddLog($"前景: {evt.KeyCode} ({evt.EventType})");
                 }
 
                 if (evt.EventType == "down")
@@ -1228,7 +1236,7 @@ namespace MapleStoryMacro
             }
             catch (Exception ex)
             {
-                AddLog($"Send failed: {ex.Message}");
+                AddLog($"按鍵發送失敗: {ex.Message}");
             }
         }
 
@@ -1427,7 +1435,7 @@ namespace MapleStoryMacro
                 uint msg = isKeyDown ? WM_SYSKEYDOWN : WM_SYSKEYUP;
                 PostMessage(hWnd, msg, (IntPtr)vkCode, lParam);
 
-                AddLog($"Alt 按鍵: VK=0x{vkCode:X2}, SC=0x{scanCode:X2}, flags=0x{flags:X}");
+                AddLog($"Alt 按鍵: VK=0x{vkCode:X2}, SC=0x{scanCode:X2}, 旗標=0x{flags:X}");
             }
             finally
             {
@@ -1559,7 +1567,7 @@ namespace MapleStoryMacro
             }
             ReleasePressedKeys();
             isPlaying = false;
-            lblPlaybackStatus.Text = "Playback: Stopped";
+            lblPlaybackStatus.Text = "播放: 已停止";
             lblPlaybackStatus.ForeColor = Color.Orange;
             AddLog("播放已停止");
             UpdateUI();
