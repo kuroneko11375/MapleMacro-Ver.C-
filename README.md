@@ -11,7 +11,7 @@
 此專案為基於 C# 開發的楓之谷自動化輔助工具，提供錄製與播放鍵盤動作的功能。透過 **Windows API (P/Invoke)** 實現底層按鍵注入，支援「前景模擬」與「背景訊息發送」兩種模式，並具備即時圖形化日誌監控系統。
 
 ## 專案介面
-<img width="695" height="633" alt="image" src="https://github.com/user-attachments/assets/e7904429-1a58-4687-a352-22ef79ee2c8f" />
+<img width="678" height="628" alt="image" src="https://github.com/user-attachments/assets/994d7641-b3c9-466a-a4cc-1b068e25d4b0" />
 
 ## ⚡ 功能特色
 
@@ -25,11 +25,11 @@
 * **背景模式：** 透過 `PostMessage` 與 `AttachThreadInput` 將鍵盤訊息發送至指定視窗。
 
 ### ⌨️ 方向鍵發送模式（三種可選）
-| 模式 | 說明 |
-|------|------|
-| **S2C (背景)** | ThreadAttach + PostMessage，純背景走路用 |
-| **TAB** | ThreadAttach + Blocker，嘗試避免影響前景 |
-| **SWB (推薦)** | SendInput + Blocker，預設模式，較穩定 |
+  | 模式 | 說明 |
+  |------|------|
+  | **S2C (背景)** | ThreadAttach + PostMessage，純背景走路用 |
+  | **TAB** | ThreadAttach + Blocker，嘗試避免影響前景 |
+  | **SWB (推薦)** | SendInput + Blocker，預設模式，較穩定 |
 
 ### ⚡ 自定義按鍵系統（15 格）
 * 設定最多 15 個自定義按鍵，在腳本播放時按間隔自動觸發
@@ -106,13 +106,8 @@
 
 ## 📅 更新紀錄
 
-### 2025/06/xx (v1.1.0)
+### 2026/02/06 (v1.1.0)
 * ✨ 新增 **自定義按鍵系統**（15 格槽位）
-* ✨ 新增 **定時執行** 功能
-* ✨ 新增 **執行統計** 功能
-* ✨ 新增 **方向鍵模式選擇**（S2C / TAB / SWB）
-* ✨ 新增 **KeyboardBlocker** 鍵盤阻擋器，減少方向鍵對前景的干擾
-* ✨ 新增 設定檔匯入/匯出功能
 * 🔧 改用 **SendInput API** 作為前景模式主要發送方式（更可靠）
 * 🔧 預設方向鍵模式改為 **SWB（推薦）**
 * 🧹 程式碼清理與優化
