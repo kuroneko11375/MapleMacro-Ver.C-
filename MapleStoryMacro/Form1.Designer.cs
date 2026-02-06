@@ -175,7 +175,6 @@ namespace MapleStoryMacro
             btnStartRecording.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
             btnStartRecording.Timer_Effect_1 = 5;
             btnStartRecording.Timer_RGB = 300;
-            btnStartRecording.Click += btnStartRecording_Click_1;
             // 
             // btnStopRecording
             // 
@@ -704,7 +703,6 @@ namespace MapleStoryMacro
             btnCustomKeys.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
             btnCustomKeys.Timer_Effect_1 = 5;
             btnCustomKeys.Timer_RGB = 300;
-            btnCustomKeys.Click += btnCustomKeys_Click;
             // 
             // btnScheduler
             // 

@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using System.Drawing;
 using System.Runtime.InteropServices;
-using System.Text;
 using System.Text.Json;
 using System.Windows.Forms;
 using System.IO;
@@ -45,14 +44,8 @@ namespace MapleStoryMacro
         private HashSet<Keys> pressedKeys = new HashSet<Keys>();
 
         // Windows API P/Invoke
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern bool SetForegroundWindow(IntPtr hWnd);
-
         [DllImport("user32.dll")]
         private static extern bool IsWindow(IntPtr hWnd);
-
-        [DllImport("user32.dll")]
-        private static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
 
         [DllImport("user32.dll")]
         private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
@@ -68,9 +61,6 @@ namespace MapleStoryMacro
         private static extern uint MapVirtualKey(uint uCode, uint uMapType);
 
         [DllImport("user32.dll")]
-        private static extern IntPtr GetFocus();
-
-        [DllImport("user32.dll")]
         private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
 
         [DllImport("kernel32.dll")]
@@ -83,8 +73,56 @@ namespace MapleStoryMacro
         [DllImport("user32.dll")]
         private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 
-        [DllImport("user32.dll")]
-        private static extern IntPtr GetForegroundWindow();
+        // SendInput API - 更現代的輸入模擬
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+        // SendInput 結構定義
+        [StructLayout(LayoutKind.Sequential)]
+        private struct INPUT
+        {
+            public uint type;
+            public InputUnion u;
+        }
+
+        [StructLayout(LayoutKind.Explicit)]
+        private struct InputUnion
+        {
+            [FieldOffset(0)] public MOUSEINPUT mi;
+            [FieldOffset(0)] public KEYBDINPUT ki;
+            [FieldOffset(0)] public HARDWAREINPUT hi;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MOUSEINPUT
+        {
+            public int dx;
+            public int dy;
+            public uint mouseData;
+            public uint dwFlags;
+            public uint time;
+            public IntPtr dwExtraInfo;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct KEYBDINPUT
+        {
+            public ushort wVk;
+            public ushort wScan;
+            public uint dwFlags;
+            public uint time;
+            public IntPtr dwExtraInfo;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct HARDWAREINPUT
+        {
+            public uint uMsg;
+            public ushort wParamL;
+            public ushort wParamH;
+        }
+
+        private const uint INPUT_KEYBOARD = 1;
 
         // 子視窗列舉相關 API
         [DllImport("user32.dll")]
@@ -98,10 +136,14 @@ namespace MapleStoryMacro
         // 方向鍵發送模式
         private enum ArrowKeyMode
         {
-            ThreadAttach,       // 線程附加模式（遊戲可用，會影響前景）
-            SendToChild         // ThreadAttach + PostMessage（背景走路用）
+            SendToChild,            // ThreadAttach + PostMessage（背景走路用）
+            ThreadAttachWithBlocker, // ThreadAttach + Blocker（嘗試避免影響前景）
+            SendInputWithBlock      // SendInput + Blocker（嘗試避免影響前景）
         }
-        private ArrowKeyMode currentArrowKeyMode = ArrowKeyMode.ThreadAttach;
+        private ArrowKeyMode currentArrowKeyMode = ArrowKeyMode.SendInputWithBlock;
+        
+        // 鍵盤阻擋器（用於 Blocker 模式）
+        private KeyboardBlocker? keyboardBlocker;
 
         // Windows message constants
         private const uint WM_KEYDOWN = 0x0100;
@@ -643,12 +685,12 @@ namespace MapleStoryMacro
 
             if (keyboardHook.Install())
             {
-                AddLog("鍵盤鉤子已啟動");
+                AddLog("鍵盤鉤子已啟动");
             }
             else
             {
                 AddLog("鍵盤鉤子啟動失敗");
-                MessageBox.Show("鍵盤鉤子啟動失敗");
+                MessageBox.Show("鍵盤鉤子啟动失敗");
                 isRecording = false;
                 return;
             }
@@ -996,6 +1038,20 @@ namespace MapleStoryMacro
             // 開始統計
             statistics.StartSession();
 
+            // 如果使用 Blocker 模式，初始化並啟動 KeyboardBlocker
+            if (currentArrowKeyMode == ArrowKeyMode.ThreadAttachWithBlocker || 
+                currentArrowKeyMode == ArrowKeyMode.SendInputWithBlock)
+            {
+                if (keyboardBlocker == null)
+                {
+                    keyboardBlocker = new KeyboardBlocker();
+                }
+                keyboardBlocker.TargetWindowHandle = targetWindowHandle;
+                keyboardBlocker.Install();
+                keyboardBlocker.IsBlocking = true;
+                AddLog($"鍵盤阻擋器已啟用 (Blocker 模式)");
+            }
+
             string mode = (targetWindowHandle != IntPtr.Zero) ? "背景" : "前景";
             AddLog($"播放開始 ({mode}模式)...");
 
@@ -1255,28 +1311,72 @@ namespace MapleStoryMacro
         {
             switch (currentArrowKeyMode)
             {
-                case ArrowKeyMode.ThreadAttach:
-                    // 純 ThreadAttach 模式：只用 keybd_event
+                case ArrowKeyMode.SendToChild:
+                    // SendToChild 模式：ThreadAttach + PostMessage（建立在 TA 之上）
+                    SendKeyWithThreadAttach(hWnd, key, isKeyDown);
+                    SendArrowKeyToChildWindow(hWnd, key, isKeyDown);
+                    break;
+
+                case ArrowKeyMode.ThreadAttachWithBlocker:
+                    // ThreadAttach + Blocker 模式：嘗試攔截對前景的影響
+                    keyboardBlocker?.RegisterPendingKey((uint)key);
                     SendKeyWithThreadAttach(hWnd, key, isKeyDown);
                     break;
 
-                case ArrowKeyMode.SendToChild:
-                    // SendToChild 模式：ThreadAttach + PostMessage（建立在 TA 之上）
-                    // 先用 ThreadAttach 確保遊戲能收到（DirectInput 需要）
-                    SendKeyWithThreadAttach(hWnd, key, isKeyDown);
-                    // 再用 PostMessage 發送到子視窗（作為備援）
-                    SendArrowKeyToChildWindow(hWnd, key, isKeyDown);
+                case ArrowKeyMode.SendInputWithBlock:
+                    // SendInput + Blocker 模式：嘗試攔截對前景的影響
+                    keyboardBlocker?.RegisterPendingKey((uint)key);
+                    SendKeyWithSendInput(key, isKeyDown);
                     break;
 
                 default:
                     SendKeyWithThreadAttach(hWnd, key, isKeyDown);
+                    SendArrowKeyToChildWindow(hWnd, key, isKeyDown);
                     break;
             }
         }
 
         /// <summary>
-        /// 發送方向鍵到子視窗模式 - 純 PostMessage，不影響前景
+        /// 使用 SendInput 發送按鍵（純前景模式）
         /// </summary>
+        private void SendKeyWithSendInput(Keys key, bool isKeyDown)
+        {
+    ushort vkCode = (ushort)key;
+            ushort scanCode = (ushort)GetScanCode(key);
+        bool isExtended = IsExtendedKey(key);
+
+       INPUT[] inputs = new INPUT[1];
+ inputs[0].type = INPUT_KEYBOARD;
+            inputs[0].u.ki.wVk = vkCode;
+    inputs[0].u.ki.wScan = scanCode;
+ inputs[0].u.ki.dwFlags = 0;
+    inputs[0].u.ki.time = 0;
+    inputs[0].u.ki.dwExtraInfo = IntPtr.Zero;
+
+   if (!isKeyDown)
+         {
+           inputs[0].u.ki.dwFlags |= KEYEVENTF_KEYUP;
+            }
+         if (isExtended)
+            {
+      inputs[0].u.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
+  }
+
+            uint result = SendInput(1, inputs, Marshal.SizeOf(typeof(INPUT)));
+
+         if (result == 0)
+            {
+     int error = Marshal.GetLastWin32Error();
+           Debug.WriteLine($"[SendInput Arrow] 失敗 (錯誤碼: {error})");
+       // 備援：使用 keybd_event
+  uint flags = 0;
+         if (!isKeyDown) flags |= KEYEVENTF_KEYUP;
+  if (isExtended) flags |= KEYEVENTF_EXTENDEDKEY;
+     keybd_event((byte)key, (byte)scanCode, flags, UIntPtr.Zero);
+            }
+     }
+       
+
         private void SendArrowKeyToChildWindow(IntPtr hWnd, Keys key, bool isKeyDown)
         {
             List<IntPtr> childWindows = new List<IntPtr>();
@@ -1471,25 +1571,46 @@ namespace MapleStoryMacro
         }
 
         /// <summary>
-        /// 前景模式發送按鍵（使用 keybd_event API）
+        /// 前景模式發送按鍵（使用 SendInput API - 更可靠）
         /// </summary>
         private void SendKeyForeground(Keys key, bool isKeyDown)
         {
-            byte vkCode = (byte)key;
-            byte scanCode = GetScanCode(key);
-            bool isExtendedKey = IsExtendedKey(key);
+            // 使用 SendInput（更現代、更可靠的方式）
+            ushort vkCode = (ushort)key;
+            ushort scanCode = (ushort)GetScanCode(key);
+            bool isExtended = IsExtendedKey(key);
 
-            uint flags = 0;
+            INPUT[] inputs = new INPUT[1];
+            inputs[0].type = INPUT_KEYBOARD;
+            inputs[0].u.ki.wVk = vkCode;
+            inputs[0].u.ki.wScan = scanCode;
+            inputs[0].u.ki.dwFlags = 0;
+            inputs[0].u.ki.time = 0;
+            inputs[0].u.ki.dwExtraInfo = IntPtr.Zero;
+
             if (!isKeyDown)
             {
-                flags |= KEYEVENTF_KEYUP;
+                inputs[0].u.ki.dwFlags |= KEYEVENTF_KEYUP;
             }
-            if (isExtendedKey)
+            if (isExtended)
             {
-                flags |= KEYEVENTF_EXTENDEDKEY;
+                inputs[0].u.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
             }
 
-            keybd_event(vkCode, scanCode, flags, UIntPtr.Zero);
+            uint result = SendInput(1, inputs, Marshal.SizeOf(typeof(INPUT)));
+
+            // 如果 SendInput 失敗，使用 keybd_event 作為備援
+            if (result == 0)
+            {
+                int error = Marshal.GetLastWin32Error();
+                Debug.WriteLine($"[SendInput FG] 失敗 (錯誤碼: {error})，使用 keybd_event 備援");
+
+                // 備援：使用 keybd_event
+                uint flags = 0;
+                if (!isKeyDown) flags |= KEYEVENTF_KEYUP;
+                if (isExtended) flags |= KEYEVENTF_EXTENDEDKEY;
+                keybd_event((byte)key, (byte)scanCode, flags, UIntPtr.Zero);
+            }
         }
 
         /// <summary>
@@ -1565,6 +1686,15 @@ namespace MapleStoryMacro
             {
                 statistics.EndSession();
             }
+            
+            // 停用 KeyboardBlocker
+            if (keyboardBlocker != null)
+            {
+                keyboardBlocker.IsBlocking = false;
+                keyboardBlocker.Uninstall();
+                AddLog($"鍵盤阻擋器已停用");
+            }
+            
             ReleasePressedKeys();
             isPlaying = false;
             lblPlaybackStatus.Text = "播放: 已停止";
@@ -1585,6 +1715,8 @@ namespace MapleStoryMacro
 
             keyboardHook?.Uninstall();
             hotkeyHook?.Uninstall();  // 停止全局熱鍵監聽
+            keyboardBlocker?.Uninstall();  // 停止鍵盤阻擋器
+            keyboardBlocker?.Dispose();
             monitorTimer?.Stop();
             schedulerTimer?.Stop();   // 停止定時執行計時器
 
@@ -1624,16 +1756,6 @@ namespace MapleStoryMacro
                     }
                 }));
             }
-        }
-
-        /// <summary>
-        /// 設定熱鍵
-        /// </summary>
-        private void SetHotkeys(Keys play, Keys stop)
-        {
-            playHotkey = play;
-            stopHotkey = stop;
-            AddLog($"熱鍵已設定：播放={GetKeyDisplayName(play)}, 停止={GetKeyDisplayName(stop)}");
         }
 
         /// <summary>
@@ -1728,13 +1850,14 @@ namespace MapleStoryMacro
             // 方向鍵模式選項
             var availableModes = new (ArrowKeyMode mode, string name)[]
             {
-                (ArrowKeyMode.ThreadAttach, "ThreadAttach"),
-                (ArrowKeyMode.SendToChild, "SendToChild")
+                (ArrowKeyMode.SendToChild, "S2C (背景)"),
+                (ArrowKeyMode.ThreadAttachWithBlocker, "TAB"),
+                (ArrowKeyMode.SendInputWithBlock, "SWB (推薦)")
             };
 
-            foreach (var mode in availableModes)
-            {
-                cmbArrowMode.Items.Add(mode.name);
+     foreach (var mode in availableModes)
+          {
+            cmbArrowMode.Items.Add(mode.name);
             }
 
             // 找到當前模式在列表中的索引
@@ -1744,7 +1867,7 @@ namespace MapleStoryMacro
             // 方向鍵模式說明
             Label lblArrowHint = new Label
             {
-                Text = "⚠️ ThreadAttach/SendToChild 仍可能影響前景，Block 模式為嘗試避免",
+                Text = "S2C=背景 | TAB=TA+Blocker | SWB=SendInput+Blocker",
                 Left = 20,
                 Top = 180,
                 Width = 400,
@@ -1795,15 +1918,7 @@ namespace MapleStoryMacro
                 // 從可用模式列表中取得實際的 enum 值
                 currentArrowKeyMode = availableModes[cmbArrowMode.SelectedIndex].mode;
 
-                AddLog($"熱鍵設定已儲存：播放={GetKeyDisplayName(playHotkey)}, 停止={GetKeyDisplayName(stopHotkey)}, 啟用={hotkeyEnabled}");
-                AddLog($"方向鍵模式：{currentArrowKeyMode}");
-                MessageBox.Show(
-                    $"設定已儲存！\n\n" +
-                    $"播放熱鍵：{GetKeyDisplayName(playHotkey)}\n" +
-                    $"停止熱鍵：{GetKeyDisplayName(stopHotkey)}\n" +
-                    $"熱鍵狀態：{(hotkeyEnabled ? "已啟用" : "已停用")}\n" +
-                    $"方向鍵模式：{cmbArrowMode.SelectedItem}",
-                    "設定完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                AddLog($"設定已儲存：播放={GetKeyDisplayName(playHotkey)}, 停止={GetKeyDisplayName(stopHotkey)}, 模式={currentArrowKeyMode}");
                 settingsForm.Close();
             };
 
@@ -2358,27 +2473,12 @@ namespace MapleStoryMacro
             lblPlaybackStatus.Text = "播放：尚未開始";
         }
 
-        private void picPreview_Click(object sender, EventArgs e)
-        {
-            // picPreview 顯示即時日誌
-        }
-
         [Serializable]
         public class MacroEvent
         {
             public Keys KeyCode { get; set; }
             public string EventType { get; set; }
             public double Timestamp { get; set; }
-        }
-
-        private void btnStartRecording_Click_1(object sender, EventArgs e)
-        {
-
-        }
-
-        private void btnCustomKeys_Click(object sender, EventArgs e)
-        {
-
         }
 
         /// <summary>
