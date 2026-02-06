@@ -78,7 +78,7 @@ namespace MapleStoryMacro
             txtWindowTitle.Font = new Font("Segoe UI", 10F);
             txtWindowTitle.ForeColor = Color.FromArgb(48, 49, 51);
             txtWindowTitle.Hint = "";
-            txtWindowTitle.Location = new Point(19, 29);
+            txtWindowTitle.Location = new Point(19, 23);
             txtWindowTitle.MaxLength = 32767;
             txtWindowTitle.Multiline = false;
             txtWindowTitle.Name = "txtWindowTitle";
@@ -98,7 +98,7 @@ namespace MapleStoryMacro
             lblStatus.AutoSize = true;
             lblStatus.Font = new Font("Microsoft JhengHei UI", 9F);
             lblStatus.ForeColor = Color.White;
-            lblStatus.Location = new Point(19, 75);
+            lblStatus.Location = new Point(19, 68);
             lblStatus.Name = "lblStatus";
             lblStatus.Size = new Size(61, 15);
             lblStatus.TabIndex = 1;
@@ -243,7 +243,7 @@ namespace MapleStoryMacro
             btnRefreshWindow.Lighting = false;
             btnRefreshWindow.LinearGradient_Background = false;
             btnRefreshWindow.LinearGradientPen = false;
-            btnRefreshWindow.Location = new Point(231, 30);
+            btnRefreshWindow.Location = new Point(231, 22);
             btnRefreshWindow.Name = "btnRefreshWindow";
             btnRefreshWindow.PenWidth = 15;
             btnRefreshWindow.Rounding = true;
@@ -283,7 +283,7 @@ namespace MapleStoryMacro
             btnLockWindow.Lighting = false;
             btnLockWindow.LinearGradient_Background = false;
             btnLockWindow.LinearGradientPen = false;
-            btnLockWindow.Location = new Point(339, 30);
+            btnLockWindow.Location = new Point(339, 22);
             btnLockWindow.Name = "btnLockWindow";
             btnLockWindow.PenWidth = 15;
             btnLockWindow.Rounding = true;
@@ -650,7 +650,7 @@ namespace MapleStoryMacro
             btnHotkeySettings.Lighting = false;
             btnHotkeySettings.LinearGradient_Background = false;
             btnHotkeySettings.LinearGradientPen = false;
-            btnHotkeySettings.Location = new Point(444, 30);
+            btnHotkeySettings.Location = new Point(444, 22);
             btnHotkeySettings.Name = "btnHotkeySettings";
             btnHotkeySettings.PenWidth = 15;
             btnHotkeySettings.Rounding = true;
@@ -810,7 +810,7 @@ namespace MapleStoryMacro
             btnSaveSettings.Lighting = false;
             btnSaveSettings.LinearGradient_Background = false;
             btnSaveSettings.LinearGradientPen = false;
-            btnSaveSettings.Location = new Point(556, 12);
+            btnSaveSettings.Location = new Point(556, 10);
             btnSaveSettings.Name = "btnSaveSettings";
             btnSaveSettings.PenWidth = 15;
             btnSaveSettings.Rounding = true;
@@ -851,7 +851,7 @@ namespace MapleStoryMacro
             btnImportSettings.Lighting = false;
             btnImportSettings.LinearGradient_Background = false;
             btnImportSettings.LinearGradientPen = false;
-            btnImportSettings.Location = new Point(556, 51);
+            btnImportSettings.Location = new Point(556, 49);
             btnImportSettings.Name = "btnImportSettings";
             btnImportSettings.PenWidth = 15;
             btnImportSettings.Rounding = true;
