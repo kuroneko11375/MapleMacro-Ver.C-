@@ -1327,6 +1327,8 @@ namespace MapleStoryMacro
                     // SendInput + Blocker 模式：嘗試攔截對前景的影響
                     keyboardBlocker?.RegisterPendingKey((uint)key);
                     SendKeyWithSendInput(key, isKeyDown);
+                    // 額外發送 PostMessage 以支援對話框視窗
+                    SendKeyToWindow(hWnd, key, isKeyDown);
                     break;
 
                 default:
