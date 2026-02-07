@@ -1348,35 +1348,36 @@ namespace MapleStoryMacro
         bool isExtended = IsExtendedKey(key);
 
        INPUT[] inputs = new INPUT[1];
- inputs[0].type = INPUT_KEYBOARD;
-            inputs[0].u.ki.wVk = vkCode;
-    inputs[0].u.ki.wScan = scanCode;
- inputs[0].u.ki.dwFlags = 0;
-    inputs[0].u.ki.time = 0;
-    inputs[0].u.ki.dwExtraInfo = IntPtr.Zero;
+        inputs[0].type = INPUT_KEYBOARD;
+        inputs[0].u.ki.wVk = vkCode;
+        inputs[0].u.ki.wScan = scanCode;
+        inputs[0].u.ki.dwFlags = 0;
+        inputs[0].u.ki.time = 0;
+        // 加上巨集標記，讓 Blocker 可以識別
+        inputs[0].u.ki.dwExtraInfo = (IntPtr)KeyboardBlocker.MACRO_KEY_MARKER;
 
-   if (!isKeyDown)
-         {
-           inputs[0].u.ki.dwFlags |= KEYEVENTF_KEYUP;
-            }
-         if (isExtended)
-            {
-      inputs[0].u.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
-  }
+        if (!isKeyDown)
+        {
+            inputs[0].u.ki.dwFlags |= KEYEVENTF_KEYUP;
+        }
+        if (isExtended)
+        {
+            inputs[0].u.ki.dwFlags |= KEYEVENTF_EXTENDEDKEY;
+        }
 
-            uint result = SendInput(1, inputs, Marshal.SizeOf(typeof(INPUT)));
+        uint result = SendInput(1, inputs, Marshal.SizeOf(typeof(INPUT)));
 
-         if (result == 0)
-            {
-     int error = Marshal.GetLastWin32Error();
-           Debug.WriteLine($"[SendInput Arrow] 失敗 (錯誤碼: {error})");
-       // 備援：使用 keybd_event
-  uint flags = 0;
-         if (!isKeyDown) flags |= KEYEVENTF_KEYUP;
-  if (isExtended) flags |= KEYEVENTF_EXTENDEDKEY;
-     keybd_event((byte)key, (byte)scanCode, flags, UIntPtr.Zero);
-            }
-     }
+        if (result == 0)
+        {
+            int error = Marshal.GetLastWin32Error();
+            Debug.WriteLine($"[SendInput Arrow] 失敗 (錯誤碼: {error})");
+            // 備援：使用 keybd_event，也要帶標記
+            uint flags = 0;
+            if (!isKeyDown) flags |= KEYEVENTF_KEYUP;
+            if (isExtended) flags |= KEYEVENTF_EXTENDEDKEY;
+            keybd_event((byte)key, (byte)scanCode, flags, (UIntPtr)KeyboardBlocker.MACRO_KEY_MARKER);
+        }
+    }
        
 
         private void SendArrowKeyToChildWindow(IntPtr hWnd, Keys key, bool isKeyDown)
