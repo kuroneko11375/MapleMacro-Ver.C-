@@ -4,7 +4,8 @@ using System.Windows.Forms;
 namespace MapleStoryMacro
 {
     /// <summary>
-    /// 應用程式設定類別 - 用於儲存和載入所有設定
+    /// 全域設定類別 - 用於儲存跨腳本的全域設定 (.json)
+    /// 不包含腳本特定資料（事件、自定義按鍵、循環次數）
     /// </summary>
     public class AppSettings
     {
@@ -28,12 +29,6 @@ namespace MapleStoryMacro
         /// </summary>
         public string WindowTitle { get; set; } = "MapleStory";
 
-
-        /// <summary>
-        /// 循環次數
-        /// </summary>
-        public int LoopCount { get; set; } = 1;
-
         /// <summary>
         /// 方向鍵發送模式
         /// </summary>
@@ -42,21 +37,12 @@ namespace MapleStoryMacro
         /// <summary>
         /// 背景切換模式
         /// </summary>
-        public int BackgroundSwitchMode { get; set; } = 3; // 預設 1.0 秒
+        public int BackgroundSwitchMode { get; set; } = 3;
 
         /// <summary>
-        /// 自定義按鍵槽位設定 (15個)
+        /// 最後載入的腳本路徑（方便下次自動載入）
         /// </summary>
-        public CustomKeySlotData[] CustomKeySlots { get; set; } = new CustomKeySlotData[15];
-
-        public AppSettings()
-        {
-            // 初始化自定義按鍵槽位
-            for (int i = 0; i < 15; i++)
-            {
-                CustomKeySlots[i] = new CustomKeySlotData { SlotNumber = i + 1 };
-            }
-        }
+        public string? LastScriptPath { get; set; }
     }
 
     /// <summary>

@@ -43,6 +43,9 @@ namespace MapleStoryMacro
 
         private HashSet<Keys> pressedKeys = new HashSet<Keys>();
 
+        // 當前腳本路徑
+        private string? currentScriptPath = null;
+
         // Windows API P/Invoke
         [DllImport("user32.dll")]
         private static extern bool IsWindow(IntPtr hWnd);
@@ -722,8 +725,8 @@ namespace MapleStoryMacro
 
             SaveFileDialog sfd = new SaveFileDialog
             {
-                Filter = "JSON 腳本|*.json",
-                DefaultExt = ".json",
+                Filter = "Maple 腳本|*.mscript|舊版 JSON 腳本|*.json",
+                DefaultExt = ".mscript",
                 Title = "保存腳本"
             };
 
@@ -731,9 +734,49 @@ namespace MapleStoryMacro
             {
                 try
                 {
-                    string json = JsonSerializer.Serialize(recordedEvents, new JsonSerializerOptions { WriteIndented = true });
+                    // 建立腳本資料
+                    var scriptData = new ScriptData
+                    {
+                        Name = Path.GetFileNameWithoutExtension(sfd.FileName),
+                        LoopCount = (int)numPlayTimes.Value,
+                        ModifiedAt = DateTime.Now
+                    };
+
+                    // 轉換事件
+                    foreach (var evt in recordedEvents)
+                    {
+                        scriptData.Events.Add(new ScriptEvent
+                        {
+                            KeyCode = (int)evt.KeyCode,
+                            EventType = evt.EventType,
+                            Timestamp = evt.Timestamp
+                        });
+                    }
+
+                    // 複製自定義按鍵設定
+                    for (int i = 0; i < 15; i++)
+                    {
+                        scriptData.CustomKeySlots[i] = new CustomKeySlotData
+                        {
+                            SlotNumber = customKeySlots[i].SlotNumber,
+                            KeyCode = (int)customKeySlots[i].KeyCode,
+                            IntervalSeconds = customKeySlots[i].IntervalSeconds,
+                            Enabled = customKeySlots[i].Enabled,
+                            StartAtSecond = customKeySlots[i].StartAtSecond,
+                            PreDelaySeconds = customKeySlots[i].PreDelaySeconds,
+                            PauseScriptSeconds = customKeySlots[i].PauseScriptSeconds,
+                            PauseScriptEnabled = customKeySlots[i].PauseScriptEnabled
+                        };
+                    }
+
+                    string json = JsonSerializer.Serialize(scriptData, new JsonSerializerOptions { WriteIndented = true });
                     File.WriteAllText(sfd.FileName, json);
-                    AddLog($"✅ 已保存: {Path.GetFileName(sfd.FileName)}");
+
+                    // 記住最後使用的腳本路徑
+                    currentScriptPath = sfd.FileName;
+
+                    int enabledCustomKeys = customKeySlots.Count(s => s.Enabled && s.KeyCode != Keys.None);
+                    AddLog($"✅ 已保存: {Path.GetFileName(sfd.FileName)} ({recordedEvents.Count} 事件, {enabledCustomKeys} 自定義按鍵)");
                 }
                 catch (Exception ex)
                 {
@@ -746,26 +789,90 @@ namespace MapleStoryMacro
         {
             OpenFileDialog ofd = new OpenFileDialog
             {
-                Filter = "JSON 腳本|*.json",
+                Filter = "Maple 腳本|*.mscript|舊版 JSON 腳本|*.json|所有檔案|*.*",
                 Title = "載入腳本"
             };
 
             if (ofd.ShowDialog() == DialogResult.OK)
             {
-                try
-                {
-                    string json = File.ReadAllText(ofd.FileName);
-                    recordedEvents = JsonSerializer.Deserialize<List<MacroEvent>>(json) ?? new List<MacroEvent>();
-                    lblRecordingStatus.Text = $"已載入 | 事件數: {recordedEvents.Count}";
-                    AddLog($"✅ 已載入: {Path.GetFileName(ofd.FileName)} ({recordedEvents.Count} 個事件)");
+                LoadScriptFromFile(ofd.FileName);
+            }
+        }
 
-                    // 更新 UI 狀態，啟用開始播放按鍵
-                    UpdateUI();
-                }
-                catch (Exception ex)
+        /// <summary>
+        /// 從檔案載入腳本
+        /// </summary>
+        private void LoadScriptFromFile(string filePath)
+        {
+            try
+            {
+                string json = File.ReadAllText(filePath);
+                string ext = Path.GetExtension(filePath).ToLowerInvariant();
+
+                // 嘗試判斷檔案格式
+                if (ext == ".mscript" || json.Contains("\"Version\"") || json.Contains("\"CustomKeySlots\""))
                 {
-                    AddLog($"❌ 載入失敗: {ex.Message}");
+                    // 新格式：ScriptData
+                    var scriptData = JsonSerializer.Deserialize<ScriptData>(json);
+                    if (scriptData == null)
+                        throw new InvalidOperationException("腳本格式無效");
+
+                    // 載入事件
+                    recordedEvents.Clear();
+                    foreach (var evt in scriptData.Events)
+                    {
+                        recordedEvents.Add(new MacroEvent
+                        {
+                            KeyCode = (Keys)evt.KeyCode,
+                            EventType = evt.EventType,
+                            Timestamp = evt.Timestamp
+                        });
+                    }
+
+                    // 載入循環次數
+                    numPlayTimes.Value = Math.Max(1, Math.Min(9999, scriptData.LoopCount));
+
+                    // 載入自定義按鍵設定
+                    if (scriptData.CustomKeySlots != null)
+                    {
+                        for (int i = 0; i < Math.Min(15, scriptData.CustomKeySlots.Length); i++)
+                        {
+                            var data = scriptData.CustomKeySlots[i];
+                            if (data != null)
+                            {
+                                customKeySlots[i].SlotNumber = data.SlotNumber;
+                                customKeySlots[i].KeyCode = (Keys)data.KeyCode;
+                                customKeySlots[i].IntervalSeconds = data.IntervalSeconds;
+                                customKeySlots[i].Enabled = data.Enabled;
+                                customKeySlots[i].StartAtSecond = data.StartAtSecond;
+                                customKeySlots[i].PreDelaySeconds = data.PreDelaySeconds;
+                                customKeySlots[i].PauseScriptSeconds = data.PauseScriptSeconds;
+                                customKeySlots[i].PauseScriptEnabled = data.PauseScriptEnabled;
+                            }
+                        }
+                    }
+
+                    int enabledCustomKeys = customKeySlots.Count(s => s.Enabled && s.KeyCode != Keys.None);
+                    AddLog($"✅ 已載入: {Path.GetFileName(filePath)} ({recordedEvents.Count} 事件, {enabledCustomKeys} 自定義按鍵)");
                 }
+                else
+                {
+                    // 舊格式：純事件列表
+                    var events = JsonSerializer.Deserialize<List<MacroEvent>>(json);
+                    recordedEvents = events ?? new List<MacroEvent>();
+                    AddLog($"✅ 已載入舊格式: {Path.GetFileName(filePath)} ({recordedEvents.Count} 事件)");
+                }
+
+                // 記住最後使用的腳本路徑
+                currentScriptPath = filePath;
+                lblRecordingStatus.Text = $"已載入 | 事件數: {recordedEvents.Count}";
+
+                // 更新 UI 狀態，啟用開始播放按鍵
+                UpdateUI();
+            }
+            catch (Exception ex)
+            {
+                AddLog($"❌ 載入失敗: {ex.Message}");
             }
         }
 
@@ -2216,8 +2323,8 @@ namespace MapleStoryMacro
                     }
 
                     int enabledCount = customKeySlots.Count(slot => slot.Enabled && slot.KeyCode != Keys.None);
-                    AddLog($"✅ 自定義按鍵設定已儲存：{enabledCount} 個已啟用");
-                    SaveSettings();
+                    AddLog($"✅ 自定義按鍵設定已更新：{enabledCount} 個已啟用");
+                    AddLog("💡 提示：自定義按鍵會隨腳本一起保存");
                     customForm.Close();
                 }
                 catch (Exception ex)
@@ -2536,7 +2643,7 @@ namespace MapleStoryMacro
                     return;
 
                 SaveSettingsToFile(sfd.FileName, "設定已導出");
-                MessageBox.Show("設定已成功導出！\n\n包含：\n• 熱鍵設定\n• 視窗標題\n• 循環次數\n• 自定義按鍵設定\n• 方向鍵模式",
+                MessageBox.Show("設定已成功導出！\n\n包含：\n• 熱鍵設定\n• 視窗標題\n• 方向鍵模式\n\n注意：自定義按鍵設定現在隨腳本 (.mscript) 一起保存",
                     "導出成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
@@ -2567,7 +2674,7 @@ namespace MapleStoryMacro
                 ApplySettings(settings);
                 SaveSettingsToFile(SettingsFilePath, "設定已匯入");
 
-                MessageBox.Show("設定已成功匯入！\n\n包含：\n• 熱鍵設定\n• 視窗標題\n• 循環次數\n• 自定義按鍵設定\n• 方向鍵模式",
+                MessageBox.Show("設定已成功匯入！\n\n包含：\n• 熱鍵設定\n• 視窗標題\n• 方向鍵模式\n\n注意：自定義按鍵設定現在隨腳本 (.mscript) 一起保存",
                     "匯入成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
@@ -2604,24 +2711,9 @@ namespace MapleStoryMacro
                 StopHotkey = stopHotkey,
                 HotkeyEnabled = hotkeyEnabled,
                 WindowTitle = txtWindowTitle.Text,
-                LoopCount = (int)numPlayTimes.Value,
-                ArrowKeyMode = (int)currentArrowKeyMode
+                ArrowKeyMode = (int)currentArrowKeyMode,
+                LastScriptPath = currentScriptPath
             };
-
-            for (int i = 0; i < 15; i++)
-            {
-                settings.CustomKeySlots[i] = new CustomKeySlotData
-                {
-                    SlotNumber = customKeySlots[i].SlotNumber,
-                    KeyCode = (int)customKeySlots[i].KeyCode,
-                    IntervalSeconds = customKeySlots[i].IntervalSeconds,
-                    Enabled = customKeySlots[i].Enabled,
-                    StartAtSecond = customKeySlots[i].StartAtSecond,
-                    PreDelaySeconds = customKeySlots[i].PreDelaySeconds,
-                    PauseScriptSeconds = customKeySlots[i].PauseScriptSeconds,
-                    PauseScriptEnabled = customKeySlots[i].PauseScriptEnabled
-                };
-            }
 
             return settings;
         }
@@ -2632,37 +2724,18 @@ namespace MapleStoryMacro
             stopHotkey = settings.StopHotkey;
             hotkeyEnabled = settings.HotkeyEnabled;
             txtWindowTitle.Text = settings.WindowTitle;
-            numPlayTimes.Value = Math.Max(1, Math.Min(9999, settings.LoopCount));
             currentArrowKeyMode = (ArrowKeyMode)settings.ArrowKeyMode;
 
-            if (settings.CustomKeySlots != null)
+            // 嘗試自動載入上次的腳本
+            if (!string.IsNullOrEmpty(settings.LastScriptPath) && File.Exists(settings.LastScriptPath))
             {
-                for (int i = 0; i < Math.Min(15, settings.CustomKeySlots.Length); i++)
-                {
-                    var data = settings.CustomKeySlots[i];
-                    if (data != null)
-                    {
-                        customKeySlots[i].SlotNumber = data.SlotNumber;
-                        customKeySlots[i].KeyCode = (Keys)data.KeyCode;
-                        customKeySlots[i].IntervalSeconds = data.IntervalSeconds;
-                        customKeySlots[i].Enabled = data.Enabled;
-                        customKeySlots[i].StartAtSecond = data.StartAtSecond;
-                        customKeySlots[i].PreDelaySeconds = data.PreDelaySeconds;
-                        customKeySlots[i].PauseScriptSeconds = data.PauseScriptSeconds;
-                        customKeySlots[i].PauseScriptEnabled = data.PauseScriptEnabled;
-                    }
-                }
+                currentScriptPath = settings.LastScriptPath;
+                AddLog($"發現上次腳本: {Path.GetFileName(settings.LastScriptPath)}");
             }
 
-            AddLog("設定已載入");
+            AddLog("全域設定已載入");
             AddLog($"熱鍵：播放={GetKeyDisplayName(playHotkey)}, 停止={GetKeyDisplayName(stopHotkey)}");
             AddLog($"方向鍵模式：{currentArrowKeyMode}");
-
-            int enabledCount = customKeySlots.Count(s => s.Enabled && s.KeyCode != Keys.None);
-            if (enabledCount > 0)
-            {
-                AddLog($"自定義按鍵：{enabledCount} 個已啟用");
-            }
 
             UpdateUI();
         }
