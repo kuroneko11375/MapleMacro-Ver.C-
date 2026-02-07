@@ -26,7 +26,7 @@ namespace MapleStoryMacro
         
         // 時間戳記追蹤（用於輔助識別）
         private readonly ConcurrentDictionary<uint, DateTime> _pendingKeys = new();
-        private readonly TimeSpan _keyTimeout = TimeSpan.FromMilliseconds(100);
+        private readonly TimeSpan _keyTimeout = TimeSpan.FromMilliseconds(30);  // 縮短超時時間加快檢測
 
         private IntPtr _hookHandle = IntPtr.Zero;
         private LowLevelKeyboardProc _hookProc;
@@ -235,8 +235,8 @@ namespace MapleStoryMacro
         }
 
         /// <summary>
-        /// 鉤子回調函數 - 多重檢測攔截模式
-        /// 使用多種方式識別巨集按鍵：dwExtraInfo 標記、LLKHF_INJECTED 旗標、時間戳記追蹤
+        /// 鉤子回調函數 - 快速攔截模式
+        /// 優先使用 dwExtraInfo Marker 檢測（最快），其次 LLKHF_INJECTED，最後時間戳記
         /// </summary>
         private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
         {
@@ -250,115 +250,104 @@ namespace MapleStoryMacro
                 {
                     KBDLLHOOKSTRUCT hookStruct = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
                     
-                    // 多重檢測：判斷是否為巨集發送的按鍵
-                    bool isMacroKey = false;
-                    string detectionMethod = "";
-                    
-                    // 檢測方式 1：dwExtraInfo 標記
+                    // ★ 快速路徑：先檢查 Marker（最快、最可靠）
                     if (UseMarkerDetection)
                     {
                         ulong extraInfo = hookStruct.dwExtraInfo.ToUInt64();
                         if (extraInfo == MACRO_KEY_MARKER)
                         {
-                            isMacroKey = true;
-                            detectionMethod = "Marker";
+                            // 直接攔截，不需要其他檢測
+                            return HandleMacroKey(hookStruct, msg, "Marker");
                         }
                     }
                     
                     // 檢測方式 2：LLKHF_INJECTED 旗標（程式注入的按鍵）
-                    if (!isMacroKey && UseInjectedDetection)
+                    if (UseInjectedDetection)
                     {
                         bool isInjected = (hookStruct.flags & LLKHF_INJECTED) != 0;
                         bool isLowerIL = (hookStruct.flags & LLKHF_LOWER_IL_INJECTED) != 0;
                         
                         if (isInjected || isLowerIL)
                         {
-                            // 額外檢查：只攔截方向鍵和我們關注的按鍵
+                            // 只攔截方向鍵和目標按鍵
                             if (IsArrowOrTargetKey(hookStruct.vkCode))
                             {
-                                isMacroKey = true;
-                                detectionMethod = isLowerIL ? "LowerIL" : "Injected";
+                                return HandleMacroKey(hookStruct, msg, isLowerIL ? "LowerIL" : "Injected");
                             }
                         }
                     }
                     
-                    // 檢測方式 3：時間戳記追蹤
-                    if (!isMacroKey && UseTimestampDetection)
+                    // 檢測方式 3：時間戳記追蹤（備援）
+                    if (UseTimestampDetection && IsPendingKey(hookStruct.vkCode))
                     {
-                        if (IsPendingKey(hookStruct.vkCode))
-                        {
-                            isMacroKey = true;
-                            detectionMethod = "Timestamp";
-                        }
-                    }
-                    
-                    // 如果識別為巨集按鍵
-                    if (isMacroKey)
-                    {
-                        IntPtr foregroundWindow = GetForegroundWindow();
-                        bool isKeyDown = (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN);
-                        
-                        // 檢查目標視窗是否有效
-                        if (TargetWindowHandle != IntPtr.Zero && IsWindow(TargetWindowHandle))
-                        {
-                            if (foregroundWindow == TargetWindowHandle)
-                            {
-                                // 前景視窗是遊戲 → 放行
-                                PassedKeyCount++;
-                                if (DebugMode)
-                                {
-                                    Debug.WriteLine($"[Blocker] ✓ 放行: VK=0x{hookStruct.vkCode:X2} ({detectionMethod}, 前景=目標)");
-                                }
-                                return CallNextHookEx(_hookHandle, nCode, wParam, lParam);
-                            }
-                            else
-                            {
-                                // 前景視窗不是遊戲 → 攔截 + 額外發送 PostMessage 確保遊戲收到
-                                BlockedKeyCount++;
-                                
-                                if (SendPostMessageOnBlock)
-                                {
-                                    // 構建 lParam 並發送 PostMessage 給遊戲
-                                    SendKeyMessageToTarget(hookStruct.vkCode, hookStruct.scanCode, isKeyDown);
-                                    PostMessageSentCount++;
-                                }
-                                
-                                if (DebugMode)
-                                {
-                                    Debug.WriteLine($"[Blocker] ★ 攔截: VK=0x{hookStruct.vkCode:X2} ({detectionMethod}, PostMsg={SendPostMessageOnBlock})");
-                                }
-                                return (IntPtr)1;
-                            }
-                        }
-                        else
-                        {
-                            // 沒有設定目標視窗 → 預設攔截
-                            BlockedKeyCount++;
-                            if (DebugMode)
-                            {
-                                Debug.WriteLine($"[Blocker] ★ 攔截: VK=0x{hookStruct.vkCode:X2} ({detectionMethod}, 無目標)");
-                            }
-                            return (IntPtr)1;
-                        }
-                    }
-                    else
-                    {
-                        // 非巨集按鍵 → 放行
-                        PassedKeyCount++;
+                        return HandleMacroKey(hookStruct, msg, "Timestamp");
                     }
                 }
             }
 
-            // 繼續傳遞給下一個鉤子
+            // 非巨集按鍵或未啟用攔截 → 放行
             return CallNextHookEx(_hookHandle, nCode, wParam, lParam);
         }
         
         /// <summary>
-        /// 檢查是否為方向鍵或目標按鍵
+        /// 處理識別為巨集的按鍵（統一處理邏輯）
+        /// </summary>
+        private IntPtr HandleMacroKey(KBDLLHOOKSTRUCT hookStruct, int msg, string detectionMethod)
+        {
+            IntPtr foregroundWindow = GetForegroundWindow();
+            bool isKeyDown = (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN);
+            
+            // 檢查目標視窗是否有效
+            if (TargetWindowHandle != IntPtr.Zero && IsWindow(TargetWindowHandle))
+            {
+                if (foregroundWindow == TargetWindowHandle)
+                {
+                    // 前景視窗是遊戲 → 放行
+                    PassedKeyCount++;
+                    if (DebugMode)
+                    {
+                        Debug.WriteLine($"[Blocker] ✓ 放行: VK=0x{hookStruct.vkCode:X2} ({detectionMethod}, 前景=目標)");
+                    }
+                    return CallNextHookEx(_hookHandle, 0, (IntPtr)msg, IntPtr.Zero);
+                }
+                else
+                {
+                    // 前景視窗不是遊戲 → 攔截 + 額外發送 PostMessage 確保遊戲收到
+                    BlockedKeyCount++;
+                    
+                    if (SendPostMessageOnBlock)
+                    {
+                        // 構建 lParam 並發送 PostMessage 給遊戲
+                        SendKeyMessageToTarget(hookStruct.vkCode, hookStruct.scanCode, isKeyDown);
+                        PostMessageSentCount++;
+                    }
+                    
+                    if (DebugMode)
+                    {
+                        Debug.WriteLine($"[Blocker] ★ 攔截: VK=0x{hookStruct.vkCode:X2} ({detectionMethod}, PostMsg={SendPostMessageOnBlock})");
+                    }
+                    return (IntPtr)1;  // 攔截按鍵
+                }
+            }
+            else
+            {
+                // 沒有設定目標視窗 → 預設攔截
+                BlockedKeyCount++;
+                if (DebugMode)
+                {
+                    Debug.WriteLine($"[Blocker] ★ 攔截: VK=0x{hookStruct.vkCode:X2} ({detectionMethod}, 無目標)");
+                }
+                return (IntPtr)1;  // 攔截按鍵
+            }
+        }
+        
+        /// <summary>
+        /// 檢查是否為方向鍵或目標按鍵（用於 Injected 檢測）
+        /// 注意：組合鍵時所有注入的按鍵都應該被攔截
         /// </summary>
         private bool IsArrowOrTargetKey(uint vkCode)
         {
-            // 方向鍵
+            // 方向鍵（最常見的問題按鍵）
             if (vkCode == 0x25 || vkCode == 0x26 || vkCode == 0x27 || vkCode == 0x28) // Left, Up, Right, Down
                 return true;
             
@@ -368,6 +357,32 @@ namespace MapleStoryMacro
             if (vkCode == 0x24 || vkCode == 0x23) // Home, End
                 return true;
             if (vkCode == 0x21 || vkCode == 0x22) // PageUp, PageDown
+                return true;
+            
+            // 一般字母鍵（組合鍵中常用，如 X+Down, Y+Right）
+            if (vkCode >= 0x41 && vkCode <= 0x5A) // A-Z
+                return true;
+            
+            // 數字鍵
+            if (vkCode >= 0x30 && vkCode <= 0x39) // 0-9
+                return true;
+            
+            // 功能鍵
+            if (vkCode >= 0x70 && vkCode <= 0x7B) // F1-F12
+                return true;
+            
+            // 空白鍵、Enter、Escape
+            if (vkCode == 0x20 || vkCode == 0x0D || vkCode == 0x1B) // Space, Enter, Escape
+                return true;
+            
+            // Shift, Ctrl, Alt（修飾鍵）
+            if (vkCode == 0x10 || vkCode == 0x11 || vkCode == 0x12) // Shift, Ctrl, Alt
+                return true;
+            if (vkCode == 0xA0 || vkCode == 0xA1) // LShift, RShift
+                return true;
+            if (vkCode == 0xA2 || vkCode == 0xA3) // LCtrl, RCtrl
+                return true;
+            if (vkCode == 0xA4 || vkCode == 0xA5) // LAlt, RAlt
                 return true;
                 
             return false;
