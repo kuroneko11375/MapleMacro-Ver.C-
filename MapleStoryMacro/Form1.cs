@@ -1379,7 +1379,6 @@ namespace MapleStoryMacro
                 keybd_event((byte)key, (byte)scanCode, flags, (UIntPtr)KeyboardBlocker.MACRO_KEY_MARKER);
             }
         }
-       
 
         private void SendArrowKeyToChildWindow(IntPtr hWnd, Keys key, bool isKeyDown)
         {
