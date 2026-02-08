@@ -2,7 +2,7 @@
 
 **作者：** SchwarzeKatze_R
 
-**版本：** 1.1.0
+**版本：** 1.1.1
 
 **開發語言：** C# (.NET 8, WinForms)
 
@@ -24,12 +24,19 @@
 * **前景模式：** 透過 `SendInput` API 模擬真實物理按鍵（更可靠）。
 * **背景模式：** 透過 `PostMessage` 與 `AttachThreadInput` 將鍵盤訊息發送至指定視窗。
 
-### ⌨️ 方向鍵發送模式（三種可選）
+### ⌨️ 背景按鍵發送策略（混合模式）
+  | 按鍵類型 | 發送方式 | 說明 |
+  |----------|----------|------|
+  | **方向鍵 / 導航鍵** | ATT + SetFocus + SendInput | Hook 放行，遊戲收 WM_KEYDOWN |
+  | **英數鍵 (A-Z, 0-9...)** | PostMessage | 直接投遞到遊戲訊息佇列，不經 Hook、不影響前景 |
+
+### ⌨️ 方向鍵發送模式（四種可選）
   | 模式 | 說明 |
   |------|------|
+  | **🦀 Rust FF (推薦)** | Rust DLL Flash Focus，混合 SendInput + PostMessage，最穩定 |
   | **S2C (背景)** | ThreadAttach + PostMessage，純背景走路用 |
   | **TAB** | ThreadAttach + Blocker，嘗試避免影響前景 |
-  | **SWB (推薦)** | SendInput + Blocker，預設模式，較穩定 |
+  | **SWB** | SendInput + Blocker |
 
 ### ⚡ 自定義按鍵系統（15 格）
 * 設定最多 15 個自定義按鍵，在腳本播放時按間隔自動觸發
@@ -66,13 +73,15 @@
 ## ⚠️ 需要注意 (Important)
 
 1. **方向鍵模式選擇：**
-   * **SWB 模式（預設推薦）**：使用 SendInput + 鍵盤阻擋器，較穩定
-   * **TAB 模式**：使用 ThreadAttach + 鍵盤阻擋器
+   * **🦀 Rust FF 模式（預設推薦）**：使用 Rust DLL 實現 Flash Focus，混合 SendInput（方向鍵）+ PostMessage（英數鍵）
    * **S2C 模式**：純背景模式，適合走路腳本
+   * **TAB 模式**：使用 ThreadAttach + 鍵盤阻擋器
+   * **SWB 模式**：使用 SendInput + 鍵盤阻擋器
 
 2. **按鍵支援說明：**
+   * 方向鍵、導航鍵（Extended keys）：透過 ATT + SetFocus + SendInput，Hook 放行
+   * 英數鍵（A-Z, 0-9 等）：透過 PostMessage 直接送到遊戲視窗，不影響前景
    * 背景模式下 **Alt 鍵** 使用特殊發送方式處理
-   * 方向鍵、Insert、Delete 等延伸鍵會自動使用適當的發送方式
 
 ## ▶️ 操作說明
 
@@ -101,6 +110,13 @@
    * 點擊「統計」查看執行數據
 
 ## 📅 更新紀錄
+
+### 2025/02/08 (v1.1.1)
+* 🦀 新增 **Rust DLL 引擎**（`macro_core.dll`）— 背景按鍵發送核心
+* ⚡ 背景按鍵改為 **混合策略**：方向鍵用 SendInput、英數鍵用 PostMessage
+* 🔧 英數鍵改用 PostMessage 直接投遞到遊戲訊息佇列，完全不影響前景視窗
+* 🔧 方向鍵維持 ATT + SetFocus + SendInput，Hook 自動放行 Extended keys
+* 🔧 預設模式改為 **🦀 Rust FF（推薦）**
 
 ### 2026/02/06 (v1.1.0_V4)
 * 小幅更新攔截語法

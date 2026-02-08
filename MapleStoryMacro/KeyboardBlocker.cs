@@ -8,12 +8,15 @@ namespace MapleStoryMacro
     /// <summary>
     /// 鍵盤阻擋器 - 使用 Low-Level Keyboard Hook 過濾巨集發送的按鍵
     /// 
-    /// 工作原理（多重檢測 + 智能攔截）：
+    /// 工作原理（純攔截模式）：
     /// 1. 檢測帶有 MACRO_KEY_MARKER 標記的按鍵 (dwExtraInfo)
     /// 2. 檢測 LLKHF_INJECTED 旗標（程式注入的按鍵）
-    /// 3. 時間戳記追蹤（50ms 內發送的按鍵）
+    /// 3. 時間戳記追蹤（100ms 內發送的按鍵）
     /// 4. 如果前景視窗是遊戲 → 放行
-    /// 5. 如果前景視窗不是遊戲 → 攔截 + PostMessage 發送給遊戲
+    /// 5. 如果前景視窗不是遊戲 → 純攔截（不重送，重送由 Form1 負責）
+    /// 
+    /// 重入防護：Form1 使用 BeginResend/EndResend 包裹 keybd_event，
+    /// 讓 Blocker 放行重送的按鍵。
     /// </summary>
     public class KeyboardBlocker : IDisposable
     {
@@ -26,12 +29,15 @@ namespace MapleStoryMacro
         
         // 時間戳記追蹤（用於輔助識別）
         private readonly ConcurrentDictionary<uint, DateTime> _pendingKeys = new();
-        private readonly TimeSpan _keyTimeout = TimeSpan.FromMilliseconds(30);  // 縮短超時時間加快檢測
+        private readonly TimeSpan _keyTimeout = TimeSpan.FromMilliseconds(100);  // 放寬超時避免競爭條件
 
         private IntPtr _hookHandle = IntPtr.Zero;
         private LowLevelKeyboardProc _hookProc;
         private bool _isBlocking = false;
         private bool _disposed = false;
+        
+        // 重入防護 - Form1 使用 BeginResend/EndResend 設定，讓重送的 keybd_event 不被攔截
+        private volatile bool _isResending = false;
 
         // 目標視窗句柄 - 遊戲視窗
         public IntPtr TargetWindowHandle { get; set; } = IntPtr.Zero;
@@ -39,7 +45,6 @@ namespace MapleStoryMacro
         // 統計資料
         public int BlockedKeyCount { get; private set; } = 0;
         public int PassedKeyCount { get; private set; } = 0;
-        public int PostMessageSentCount { get; private set; } = 0;
 
         // 調試模式
         public bool DebugMode { get; set; } = false;
@@ -48,9 +53,9 @@ namespace MapleStoryMacro
         public bool UseMarkerDetection { get; set; } = true;     // 使用 dwExtraInfo 標記
         public bool UseInjectedDetection { get; set; } = true;   // 使用 LLKHF_INJECTED 旗標
         public bool UseTimestampDetection { get; set; } = true;  // 使用時間戳記追蹤
-        public bool SendPostMessageOnBlock { get; set; } = true; // 攔截時發送 PostMessage
 
         #region Windows API
+
 
         private const int WH_KEYBOARD_LL = 13;
         private const int WM_KEYDOWN = 0x0100;
@@ -77,36 +82,8 @@ namespace MapleStoryMacro
         private static extern IntPtr GetForegroundWindow();
 
         [DllImport("user32.dll")]
-        private static extern uint MapVirtualKey(uint uCode, uint uMapType);
-
-        [DllImport("user32.dll")]
-        private static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
-
-        [DllImport("user32.dll")]
-        private static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
-
-        [DllImport("user32.dll")]
-        private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
-
-        [DllImport("user32.dll")]
-        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
-
-
-        [DllImport("kernel32.dll")]
-        private static extern uint GetCurrentThreadId();
-
-        [DllImport("user32.dll")]
-        private static extern IntPtr SetFocus(IntPtr hWnd);
-
-        [DllImport("user32.dll")]
-        private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
-
-        [DllImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool IsWindow(IntPtr hWnd);
-
-        private const uint KEYEVENTF_KEYUP = 0x0002;
-        private const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
 
         [StructLayout(LayoutKind.Sequential)]
         private struct KBDLLHOOKSTRUCT
@@ -191,8 +168,24 @@ namespace MapleStoryMacro
         {
             BlockedKeyCount = 0;
             PassedKeyCount = 0;
-            PostMessageSentCount = 0;
             _pendingKeys.Clear();
+        }
+        
+        /// <summary>
+        /// 開始重送模式 - 設定重入防護，讓後續的 keybd_event 不被攔截
+        /// 必須與 EndResend 配對使用
+        /// </summary>
+        public void BeginResend()
+        {
+            _isResending = true;
+        }
+        
+        /// <summary>
+        /// 結束重送模式 - 解除重入防護
+        /// </summary>
+        public void EndResend()
+        {
+            _isResending = false;
         }
         
         /// <summary>
@@ -235,8 +228,9 @@ namespace MapleStoryMacro
         }
 
         /// <summary>
-        /// 鉤子回調函數 - 快速攔截模式
-        /// 優先使用 dwExtraInfo Marker 檢測（最快），其次 LLKHF_INJECTED，最後時間戳記
+        /// 鉤子回調函數 - 條件攔截模式
+        /// 遊戲是前景 → 放行（WM_KEYDOWN 送到遊戲）
+        /// 遊戲不是前景 → 攔截（保護 Chrome，遊戲透過 PostMessage 收到 WM_KEYDOWN）
         /// </summary>
         private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
         {
@@ -250,14 +244,26 @@ namespace MapleStoryMacro
                 {
                     KBDLLHOOKSTRUCT hookStruct = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
                     
-                    // ★ 快速路徑：先檢查 Marker（最快、最可靠）
+                    // ★ Marker 標記的按鍵
                     if (UseMarkerDetection)
                     {
                         ulong extraInfo = hookStruct.dwExtraInfo.ToUInt64();
                         if (extraInfo == MACRO_KEY_MARKER)
                         {
-                            // 直接攔截，不需要其他檢測
-                            return HandleMacroKey(hookStruct, msg, "Marker");
+                            // 遊戲是前景 → 放行（WM_KEYDOWN 送到遊戲）
+                            if (IsGameForeground())
+                            {
+                                PassedKeyCount++;
+                                return CallNextHookEx(_hookHandle, nCode, wParam, lParam);
+                            }
+                            // 遊戲不是前景 → 攔截（保護 Chrome）
+                            // 遊戲透過 PostMessage 收到 WM_KEYDOWN（繞過 LL hook）
+                            BlockedKeyCount++;
+                            if (DebugMode)
+                            {
+                                Debug.WriteLine($"[Blocker] ★ 攔截(Marker): VK=0x{hookStruct.vkCode:X2}");
+                            }
+                            return (IntPtr)1;
                         }
                     }
                     
@@ -272,7 +278,7 @@ namespace MapleStoryMacro
                             // 只攔截方向鍵和目標按鍵
                             if (IsArrowOrTargetKey(hookStruct.vkCode))
                             {
-                                return HandleMacroKey(hookStruct, msg, isLowerIL ? "LowerIL" : "Injected");
+                                return HandleMacroKey(hookStruct, msg, nCode, wParam, lParam, isLowerIL ? "LowerIL" : "Injected");
                             }
                         }
                     }
@@ -280,7 +286,7 @@ namespace MapleStoryMacro
                     // 檢測方式 3：時間戳記追蹤（備援）
                     if (UseTimestampDetection && IsPendingKey(hookStruct.vkCode))
                     {
-                        return HandleMacroKey(hookStruct, msg, "Timestamp");
+                        return HandleMacroKey(hookStruct, msg, nCode, wParam, lParam, "Timestamp");
                     }
                 }
             }
@@ -290,55 +296,34 @@ namespace MapleStoryMacro
         }
         
         /// <summary>
-        /// 處理識別為巨集的按鍵（統一處理邏輯）
+        /// 檢查遊戲是否為前景視窗
         /// </summary>
-        private IntPtr HandleMacroKey(KBDLLHOOKSTRUCT hookStruct, int msg, string detectionMethod)
+        private bool IsGameForeground()
         {
-            IntPtr foregroundWindow = GetForegroundWindow();
-            bool isKeyDown = (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN);
-            
-            // 檢查目標視窗是否有效
-            if (TargetWindowHandle != IntPtr.Zero && IsWindow(TargetWindowHandle))
+            if (TargetWindowHandle == IntPtr.Zero || !IsWindow(TargetWindowHandle))
+                return false;
+            IntPtr foreground = GetForegroundWindow();
+            return foreground == TargetWindowHandle;
+        }
+        
+        /// <summary>
+        /// 處理識別為巨集的按鍵 — 根據前景狀態決定放行或攔截
+        /// </summary>
+        private IntPtr HandleMacroKey(KBDLLHOOKSTRUCT hookStruct, int msg, int origNCode, IntPtr origWParam, IntPtr origLParam, string detectionMethod)
+        {
+            // 遊戲是前景 → 放行
+            if (IsGameForeground())
             {
-                if (foregroundWindow == TargetWindowHandle)
-                {
-                    // 前景視窗是遊戲 → 放行
-                    PassedKeyCount++;
-                    if (DebugMode)
-                    {
-                        Debug.WriteLine($"[Blocker] ✓ 放行: VK=0x{hookStruct.vkCode:X2} ({detectionMethod}, 前景=目標)");
-                    }
-                    return CallNextHookEx(_hookHandle, 0, (IntPtr)msg, IntPtr.Zero);
-                }
-                else
-                {
-                    // 前景視窗不是遊戲 → 攔截 + 額外發送 PostMessage 確保遊戲收到
-                    BlockedKeyCount++;
-                    
-                    if (SendPostMessageOnBlock)
-                    {
-                        // 構建 lParam 並發送 PostMessage 給遊戲
-                        SendKeyMessageToTarget(hookStruct.vkCode, hookStruct.scanCode, isKeyDown);
-                        PostMessageSentCount++;
-                    }
-                    
-                    if (DebugMode)
-                    {
-                        Debug.WriteLine($"[Blocker] ★ 攔截: VK=0x{hookStruct.vkCode:X2} ({detectionMethod}, PostMsg={SendPostMessageOnBlock})");
-                    }
-                    return (IntPtr)1;  // 攔截按鍵
-                }
+                PassedKeyCount++;
+                return CallNextHookEx(_hookHandle, origNCode, origWParam, origLParam);
             }
-            else
+            // 遊戲不是前景 → 攔截
+            BlockedKeyCount++;
+            if (DebugMode)
             {
-                // 沒有設定目標視窗 → 預設攔截
-                BlockedKeyCount++;
-                if (DebugMode)
-                {
-                    Debug.WriteLine($"[Blocker] ★ 攔截: VK=0x{hookStruct.vkCode:X2} ({detectionMethod}, 無目標)");
-                }
-                return (IntPtr)1;  // 攔截按鍵
+                Debug.WriteLine($"[Blocker] ★ 攔截: VK=0x{hookStruct.vkCode:X2} ({detectionMethod})");
             }
+            return (IntPtr)1;
         }
         
         /// <summary>
@@ -386,59 +371,6 @@ namespace MapleStoryMacro
                 return true;
                 
             return false;
-        }
-        
-        /// <summary>
-        /// 發送按鍵到目標視窗（使用 AttachThreadInput + keybd_event，方向鍵必須用這種方式）
-        /// </summary>
-        private void SendKeyMessageToTarget(uint vkCode, uint scanCode, bool isKeyDown)
-        {
-            if (TargetWindowHandle == IntPtr.Zero || !IsWindow(TargetWindowHandle))
-                return;
-            
-            uint targetThreadId = GetWindowThreadProcessId(TargetWindowHandle, out uint processId);
-            uint currentThreadId = GetCurrentThreadId();
-            
-            bool attached = false;
-            try
-            {
-                // 附加線程以便能設定焦點
-                if (targetThreadId != currentThreadId)
-                {
-                    attached = AttachThreadInput(currentThreadId, targetThreadId, true);
-                }
-                
-                if (attached)
-                {
-                    // 設定焦點到遊戲視窗（在線程附加後有效）
-                    SetFocus(TargetWindowHandle);
-                }
-                
-                // 使用 keybd_event 發送按鍵（不帶 Marker，避免被再次攔截）
-                byte vk = (byte)vkCode;
-                byte sc = (byte)scanCode;
-                uint flags = 0;
-                
-                if (!isKeyDown)
-                {
-                    flags |= KEYEVENTF_KEYUP;
-                }
-                if (IsArrowOrTargetKey(vkCode))
-                {
-                    flags |= KEYEVENTF_EXTENDEDKEY;
-                }
-                
-                // 不帶 Marker，直接發送
-                keybd_event(vk, sc, flags, UIntPtr.Zero);
-            }
-            finally
-            {
-                // 解除線程附加
-                if (attached && targetThreadId != currentThreadId)
-                {
-                    AttachThreadInput(currentThreadId, targetThreadId, false);
-                }
-            }
         }
 
         #region IDisposable

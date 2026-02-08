@@ -14,6 +14,13 @@
     <PackageReference Include="ReaLTaiizor" Version="3.8.1.5" />
   </ItemGroup>
 
+  <!-- Rust native DLL - auto copy to output -->
+  <ItemGroup>
+    <None Include="macro_core.dll">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
   <!-- �x�� vJoy C# Wrapper -->
 
   <!-- �ƻs vJoy DLL ���X�ؿ� -->

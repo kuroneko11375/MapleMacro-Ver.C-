@@ -31,8 +31,9 @@ namespace MapleStoryMacro
 
         /// <summary>
         /// 方向鍵發送模式
+        /// 0=SendToChild, 1=ThreadAttachWithBlocker, 2=SendInputWithBlock, 3=RustFlashFocus
         /// </summary>
-        public int ArrowKeyMode { get; set; } = 2;
+        public int ArrowKeyMode { get; set; } = 3;
 
         /// <summary>
         /// 背景切換模式
