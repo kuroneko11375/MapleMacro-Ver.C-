@@ -15,12 +15,12 @@
 
 ## ⚡ 功能特色
 
-### 🎯 核心功能
+### 核心功能
 * **錄製與播放：** 採用全域鍵盤鉤子 (Keyboard Hook)，精確擷取按鍵動作與時間間隔。
 * **JSON 腳本化：** 動作序列儲存為 JSON 格式，方便分享、載入或手動編輯。
 * **視窗鎖定：** 支援關鍵字自動搜尋或從運行清單中手動選取目標遊戲視窗。
 
-### 🎮 雙模式支援
+### 雙模式支援
 * **前景模式：** 透過 `SendInput` API 模擬真實物理按鍵（更可靠）。
 * **背景模式：** 透過 `PostMessage` 與 `AttachThreadInput` 將鍵盤訊息發送至指定視窗。
 
@@ -33,12 +33,12 @@
 ### ⌨️ 方向鍵發送模式（四種可選）
   | 模式 | 說明 |
   |------|------|
-  | **🦀 Rust FF (推薦)** | Rust DLL Flash Focus，混合 SendInput + PostMessage，最穩定 |
-  | **S2C (背景)** | ThreadAttach + PostMessage，純背景走路用 |
-  | **TAB** | ThreadAttach + Blocker，嘗試避免影響前景 |
-  | **SWB** | SendInput + Blocker |
+  | **Rust FF (推薦)** | Rust DLL Flash Focus，混合 SendInput + PostMessage，最穩定 |
+  | **S2C (背景)** | ThreadAttach + PostMessage，純背景走路用，可能會影響前景視窗 |
+  | **TAB** | ThreadAttach + Blocker，嘗試避免影響前景，可能會影響前景視窗 |
+  | **SWB** | SendInput + Blocker，可能會影響前景視窗 |
 
-### ⚡ 自定義按鍵系統（15 格）
+### 自定義按鍵系統（15 格）
 * 設定最多 15 個自定義按鍵，在腳本播放時按間隔自動觸發
 * 支援設定：
   - **間隔秒數**：每隔幾秒觸發一次
@@ -46,20 +46,20 @@
   - **暫停腳本**：觸發前暫停主腳本
   - **延遲等待**：按鍵後等待（適用於技能施放）
 
-### 🔥 全局熱鍵
+### 全局熱鍵
 * **F9**：開始播放（預設）
 * **F10**：停止播放（預設）
 * 可在設定中自訂熱鍵
 
-### ⏰ 定時執行
+### 定時執行
 * 設定指定時間自動開始播放腳本
 * 即時顯示倒數計時
 
-### 📊 執行統計
+### 執行統計
 * 記錄總循環次數、執行時間
 * 追蹤各自定義按鍵觸發次數
 
-### 💾 設定管理
+### 設定管理
 * 自動儲存/載入設定
 * 支援設定檔匯入/匯出
 * 設定檔位置：`%AppData%\MapleMacro\settings.json`
@@ -73,7 +73,7 @@
 ## ⚠️ 需要注意 (Important)
 
 1. **方向鍵模式選擇：**
-   * **🦀 Rust FF 模式（預設推薦）**：使用 Rust DLL 實現 Flash Focus，混合 SendInput（方向鍵）+ PostMessage（英數鍵）
+   * **Rust FF 模式（預設推薦）**：使用 Rust DLL 實現 Flash Focus，混合 SendInput（方向鍵）+ PostMessage（英數鍵）
    * **S2C 模式**：純背景模式，適合走路腳本
    * **TAB 模式**：使用 ThreadAttach + 鍵盤阻擋器
    * **SWB 模式**：使用 SendInput + 鍵盤阻擋器
@@ -112,11 +112,11 @@
 ## 📅 更新紀錄
 
 ### 2025/02/08 (v1.1.1)
-* 🦀 新增 **Rust DLL 引擎**（`macro_core.dll`）— 背景按鍵發送核心
-* ⚡ 背景按鍵改為 **混合策略**：方向鍵用 SendInput、英數鍵用 PostMessage
-* 🔧 英數鍵改用 PostMessage 直接投遞到遊戲訊息佇列，完全不影響前景視窗
-* 🔧 方向鍵維持 ATT + SetFocus + SendInput，Hook 自動放行 Extended keys
-* 🔧 預設模式改為 **🦀 Rust FF（推薦）**
+* 新增 **Rust DLL 引擎**（`macro_core.dll`）— 背景按鍵發送核心
+* 背景按鍵改為 **混合策略**：方向鍵用 SendInput、英數鍵用 PostMessage
+* 英數鍵改用 PostMessage 直接投遞到遊戲訊息佇列，完全不影響前景視窗
+* 方向鍵維持 ATT + SetFocus + SendInput，Hook 自動放行 Extended keys
+* 預設模式改為 ** Rust FF（推薦）**
 
 ### 2026/02/06 (v1.1.0_V4)
 * 小幅更新攔截語法
