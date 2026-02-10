@@ -24,7 +24,7 @@
 * **前景模式：** 透過 `SendInput` API 模擬真實物理按鍵（更可靠）。
 * **背景模式：** 透過 `PostMessage` 與 `AttachThreadInput` 將鍵盤訊息發送至指定視窗。
 
-### ⌨️ 方向鍵發送模式（四種可選）
+### ⌨️ 方向鍵發送模式
   | 模式 | 說明 |
   |------|------|
   | **TAB** | ThreadAttach + Blocker，嘗試避免影響前景 |
