@@ -21,16 +21,6 @@ namespace MapleStoryMacro
         public string? Name { get; set; }
 
         /// <summary>
-        /// 腳本描述（可選）
-        /// </summary>
-        public string? Description { get; set; }
-
-        /// <summary>
-        /// 建立時間
-        /// </summary>
-        public DateTime CreatedAt { get; set; } = DateTime.Now;
-
-        /// <summary>
         /// 最後修改時間
         /// </summary>
         public DateTime ModifiedAt { get; set; } = DateTime.Now;

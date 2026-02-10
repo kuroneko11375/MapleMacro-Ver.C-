@@ -90,22 +90,5 @@ namespace MapleStoryMacro
             LastTriggerTime = DateTime.MinValue;
         }
 
-        /// <summary>
-        /// ½Æ»s³]©w
-        /// </summary>
-        public CustomKeySlot Clone()
-        {
-            return new CustomKeySlot
-            {
-                SlotNumber = this.SlotNumber,
-                KeyCode = this.KeyCode,
-                IntervalSeconds = this.IntervalSeconds,
-                Enabled = this.Enabled,
-                StartAtSecond = this.StartAtSecond,
-                PreDelaySeconds = this.PreDelaySeconds,
-                PauseScriptSeconds = this.PauseScriptSeconds,
-                PauseScriptEnabled = this.PauseScriptEnabled
-            };
-        }
     }
 }

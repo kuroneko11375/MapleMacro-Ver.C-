@@ -141,16 +141,12 @@ namespace MapleStoryMacro
         {
             SendToChild,            // ThreadAttach + PostMessage（背景走路用）
             ThreadAttachWithBlocker, // ThreadAttach + Blocker（嘗試避免影響前景）
-            SendInputWithBlock,     // SendInput + Blocker（嘗試避免影響前景）
-            RustFlashFocus          // Rust DLL Flash Focus（推薦 - 最穩定）
+            SendInputWithBlock      // SendInput + Blocker（嘗試避免影響前景）
         }
-        private ArrowKeyMode currentArrowKeyMode = ArrowKeyMode.RustFlashFocus;
+        private ArrowKeyMode currentArrowKeyMode = ArrowKeyMode.SendInputWithBlock;
         
         // 鍵盤阻擋器（用於 Blocker 模式）
         private KeyboardBlocker? keyboardBlocker;
-
-        // Rust 鍵盤引擎（用於 FlashFocus 模式）
-        private RustKeyEngine? rustKeyEngine;
 
         // Windows message constants
         private const uint WM_KEYDOWN = 0x0100;
@@ -236,8 +232,8 @@ namespace MapleStoryMacro
         /// </summary>
         private static string GetKeyDisplayName(Keys key)
         {
-            if (KeyDisplayNames.TryGetValue(key, out string displayName))
-                return displayName;
+            if (KeyDisplayNames.TryGetValue(key, out var displayName))
+                return displayName ?? key.ToString();
             return key.ToString();
         }
 
@@ -281,11 +277,11 @@ namespace MapleStoryMacro
             this.KeyUp += Form1_KeyUp;
 
             // Initialize keyboard hook for recording
-            keyboardHook = new KeyboardHookDLL();
+            keyboardHook = new KeyboardHookDLL(KeyboardHookDLL.KeyboardHookMode.LowLevel);
             keyboardHook.OnKeyEvent += KeyboardHook_OnKeyEvent;
 
             // Initialize global hotkey hook (延遲安裝到 Form1_Shown)
-            hotkeyHook = new KeyboardHookDLL();
+            hotkeyHook = new KeyboardHookDLL(KeyboardHookDLL.KeyboardHookMode.LowLevel);
             hotkeyHook.OnKeyEvent += HotkeyHook_OnKeyEvent;
 
             // 延遲初始化 - 在表單顯示後再載入設定和啟動定時器
@@ -297,7 +293,7 @@ namespace MapleStoryMacro
             UpdateUI();
         }
 
-        private void Form1_Shown(object sender, EventArgs e)
+        private void Form1_Shown(object? sender, EventArgs e)
         {
             // 初始化日誌右鍵選單事件
             menuCopyLog.Click += MenuCopyLog_Click;
@@ -348,7 +344,7 @@ namespace MapleStoryMacro
         /// <summary>
         /// 定時執行檢查
         /// </summary>
-        private void SchedulerTimer_Tick(object sender, EventArgs e)
+        private void SchedulerTimer_Tick(object? sender, EventArgs e)
         {
             if (scheduledStartTime.HasValue && DateTime.Now >= scheduledStartTime.Value)
             {
@@ -358,7 +354,7 @@ namespace MapleStoryMacro
 
                 if (!isPlaying && recordedEvents.Count > 0)
                 {
-                    BtnStartPlayback_Click(null, null);
+                    BtnStartPlayback_Click(this, EventArgs.Empty);
                 }
             }
         }
@@ -424,7 +420,7 @@ namespace MapleStoryMacro
         }
 
 
-        private void MonitorTimer_Tick(object sender, EventArgs e)
+        private void MonitorTimer_Tick(object? sender, EventArgs e)
         {
             // 更新狀態列標籤
             string bgMode = (targetWindowHandle != IntPtr.Zero) ? "背景" : "前景";
@@ -432,19 +428,9 @@ namespace MapleStoryMacro
             string playStatus = isPlaying ? "▶️" : "⏹️";
 
             lblStatus.Text = $"{recStatus} 錄製 | {playStatus} 播放 | 模式: {bgMode} | 事件: {recordedEvents.Count}";
-
-            // 即時顯示 Hook 過濾統計
-            if (isPlaying && rustKeyEngine != null && rustKeyEngine.IsRustAvailable)
-            {
-                lblStatus.Text += $" | 🦀 B:{rustKeyEngine.BlockedKeyCount} P:{rustKeyEngine.PassedKeyCount}";
-            }
-            else if (isPlaying && keyboardBlocker != null)
-            {
-                lblStatus.Text += $" | Hook 運作中";
-            }
         }
 
-        private void Form1_KeyDown(object sender, KeyEventArgs e)
+        private void Form1_KeyDown(object? sender, KeyEventArgs e)
         {
             if (isRecording)
             {
@@ -463,7 +449,7 @@ namespace MapleStoryMacro
             }
         }
 
-        private void Form1_KeyUp(object sender, KeyEventArgs e)
+        private void Form1_KeyUp(object? sender, KeyEventArgs e)
         {
             if (isRecording)
             {
@@ -504,14 +490,14 @@ namespace MapleStoryMacro
             }
         }
 
-        private void BtnRefreshWindow_Click(object sender, EventArgs e)
+        private void BtnRefreshWindow_Click(object? sender, EventArgs e)
         {
             AddLog("正在搜尋目標視窗...");
             FindGameWindow();
             UpdateWindowStatus();
         }
 
-        private void BtnLockWindow_Click(object sender, EventArgs e)
+        private void BtnLockWindow_Click(object? sender, EventArgs e)
         {
             AddLog("正在開啟視窗選擇器...");
             SelectWindow();
@@ -625,7 +611,7 @@ namespace MapleStoryMacro
         private class ProcessItem
         {
             public IntPtr Handle { get; set; }
-            public string Title { get; set; }
+            public string Title { get; set; } = string.Empty;
         }
 
         private void FindGameWindow()
@@ -686,7 +672,7 @@ namespace MapleStoryMacro
             }
         }
 
-        private void BtnStartRecording_Click(object sender, EventArgs e)
+        private void BtnStartRecording_Click(object? sender, EventArgs e)
         {
             if (isRecording) return;
 
@@ -715,7 +701,7 @@ namespace MapleStoryMacro
             UpdateUI();
         }
 
-        private void BtnStopRecording_Click(object sender, EventArgs e)
+        private void BtnStopRecording_Click(object? sender, EventArgs e)
         {
             if (!isRecording) return;
 
@@ -729,7 +715,7 @@ namespace MapleStoryMacro
             UpdateUI();
         }
 
-        private void BtnSaveScript_Click(object sender, EventArgs e)
+        private void BtnSaveScript_Click(object? sender, EventArgs e)
         {
             if (recordedEvents.Count == 0)
             {
@@ -799,7 +785,7 @@ namespace MapleStoryMacro
             }
         }
 
-        private void BtnLoadScript_Click(object sender, EventArgs e)
+        private void BtnLoadScript_Click(object? sender, EventArgs e)
         {
             OpenFileDialog ofd = new OpenFileDialog
             {
@@ -890,7 +876,7 @@ namespace MapleStoryMacro
             }
         }
 
-        private void BtnClearEvents_Click(object sender, EventArgs e)
+        private void BtnClearEvents_Click(object? sender, EventArgs e)
         {
             if (recordedEvents.Count == 0)
             {
@@ -918,7 +904,7 @@ namespace MapleStoryMacro
             }
         }
 
-        private void BtnViewEvents_Click(object sender, EventArgs e)
+        private void BtnViewEvents_Click(object? sender, EventArgs e)
         {
             if (recordedEvents.Count == 0)
             {
@@ -957,7 +943,7 @@ namespace MapleStoryMacro
             eventViewer.ShowDialog();
         }
 
-        private void BtnEditEvents_Click(object sender, EventArgs e)
+        private void BtnEditEvents_Click(object? sender, EventArgs e)
         {
             if (recordedEvents.Count == 0)
             {
@@ -1141,7 +1127,7 @@ namespace MapleStoryMacro
             return consolidated.OrderBy(e => e.StartTime).ToList();
         }
 
-        private void BtnStartPlayback_Click(object sender, EventArgs e)
+        private void BtnStartPlayback_Click(object? sender, EventArgs e)
         {
             if (isPlaying || recordedEvents.Count == 0)
                 return;
@@ -1159,36 +1145,8 @@ namespace MapleStoryMacro
             // 開始統計
             statistics.StartSession();
 
-            // 根據模式初始化對應的引擎
-            if (currentArrowKeyMode == ArrowKeyMode.RustFlashFocus)
-            {
-                // Rust Flash Focus 模式
-                if (rustKeyEngine == null)
-                {
-                    rustKeyEngine = new RustKeyEngine();
-                }
-
-                if (rustKeyEngine.IsRustAvailable)
-                {
-                    rustKeyEngine.TargetWindowHandle = targetWindowHandle;
-                    rustKeyEngine.Install();
-                    rustKeyEngine.IsBlocking = true;
-                    AddLog($"🦀 Rust 引擎已啟用 (Flash Focus 模式)");
-                }
-                else
-                {
-                    // Rust 不可用，自動回退到 C# Blocker
-                    AddLog($"⚠️ Rust DLL 不可用，回退到 C# Blocker 模式");
-                    if (keyboardBlocker == null)
-                    {
-                        keyboardBlocker = new KeyboardBlocker();
-                    }
-                    keyboardBlocker.TargetWindowHandle = targetWindowHandle;
-                    keyboardBlocker.Install();
-                    keyboardBlocker.IsBlocking = true;
-                }
-            }
-            else if (currentArrowKeyMode == ArrowKeyMode.ThreadAttachWithBlocker || 
+            // 如果使用 Blocker 模式，初始化並啟動 KeyboardBlocker
+            if (currentArrowKeyMode == ArrowKeyMode.ThreadAttachWithBlocker || 
                 currentArrowKeyMode == ArrowKeyMode.SendInputWithBlock)
             {
                 if (keyboardBlocker == null)
@@ -1369,10 +1327,10 @@ namespace MapleStoryMacro
             {
                 if (targetWindowHandle != IntPtr.Zero && IsWindow(targetWindowHandle))
                 {
-                    // 背景模式：統一走 SendKeyWithThreadAttach（Rust 或 C# SendInput）
-                    SendKeyWithThreadAttach(targetWindowHandle, key, true);   // 按下
+                    // 背景模式
+                    SendKeyToWindow(targetWindowHandle, key, true);  // 按下
                     Thread.Sleep(30);
-                    SendKeyWithThreadAttach(targetWindowHandle, key, false);  // 放開
+                    SendKeyToWindow(targetWindowHandle, key, false); // 放開
                 }
                 else
                 {
@@ -1395,17 +1353,43 @@ namespace MapleStoryMacro
         {
             try
             {
+                // Check if we have a valid target window for background sending
                 if (targetWindowHandle != IntPtr.Zero && IsWindow(targetWindowHandle))
                 {
-                    // 背景模式：ATT + SetFocus + SendInput（MACRO_KEY_MARKER）
-                    // 方向鍵：Hook 放行 → WM_KEYDOWN 送到遊戲
-                    // 英數鍵：Hook 攔截 → 遊戲透過 GetAsyncKeyState 讀取
-                    SendKeyWithThreadAttach(targetWindowHandle, evt.KeyCode, evt.EventType == "down");
-                    AddLog($"背景: {evt.KeyCode} ({evt.EventType})");
+                    // 對於 Alt 鍵，使用特殊的發送方式
+                    if (IsAltKey(evt.KeyCode))
+                    {
+                        SendAltKeyToWindow(targetWindowHandle, evt.KeyCode, evt.EventType == "down");
+                        AddLog($"背景(Alt): {evt.KeyCode} ({evt.EventType})");
+                    }
+                    // 對於方向鍵，根據設定的模式發送
+                    else if (IsArrowKey(evt.KeyCode))
+                    {
+                        SendArrowKeyWithMode(targetWindowHandle, evt.KeyCode, evt.EventType == "down");
+                        AddLog($"背景({currentArrowKeyMode}): {evt.KeyCode} ({evt.EventType})");
+                    }
+                    // 英數鍵：使用 PostMessage（不攔截）
+                    else if (IsAlphaNumericKey(evt.KeyCode))
+                    {
+                        SendKeyToWindow(targetWindowHandle, evt.KeyCode, evt.EventType == "down");
+                        AddLog($"背景(PM): {evt.KeyCode} ({evt.EventType})");
+                    }
+                    // 對於其他延伸鍵，使用線程附加模式
+                    else if (IsExtendedKey(evt.KeyCode))
+                    {
+                        SendKeyWithThreadAttach(targetWindowHandle, evt.KeyCode, evt.EventType == "down");
+                        AddLog($"背景(附加): {evt.KeyCode} ({evt.EventType})");
+                    }
+                    else
+                    {
+                        // 一般按鍵：使用背景模式
+                        SendKeyToWindow(targetWindowHandle, evt.KeyCode, evt.EventType == "down");
+                        AddLog($"背景: {evt.KeyCode} ({evt.EventType})");
+                    }
                 }
                 else
                 {
-                    // 前景模式
+                    // Foreground key sending using keybd_event
                     SendKeyForeground(evt.KeyCode, evt.EventType == "down");
                     AddLog($"前景: {evt.KeyCode} ({evt.EventType})");
                 }
@@ -1433,6 +1417,11 @@ namespace MapleStoryMacro
             return key == Keys.Left || key == Keys.Right || key == Keys.Up || key == Keys.Down;
         }
 
+        private bool IsAlphaNumericKey(Keys key)
+        {
+            return (key >= Keys.A && key <= Keys.Z) || (key >= Keys.D0 && key <= Keys.D9);
+        }
+
         /// <summary>
         /// 根據當前模式發送方向鍵
         /// </summary>
@@ -1454,35 +1443,11 @@ namespace MapleStoryMacro
                     break;
 
                 case ArrowKeyMode.SendInputWithBlock:
-                    // SendInput + Blocker 模式：
-                    // 1. SendInput(帶 Marker) → Blocker 攔截 → 保護前景不受影響
-                    // 2. AttachThreadInput + SetFocus + keybd_event(帶重入防護) → 送給遊戲
+                    // SendInput + Blocker 模式：嘗試攔截對前景的影響
                     keyboardBlocker?.RegisterPendingKey((uint)key);
                     SendKeyWithSendInput(key, isKeyDown);
-                    // Blocker 已攔截 SendInput，現在用重入防護直接送到遊戲
-                    ResendKeyToGame(hWnd, key, isKeyDown);
-                    break;
-
-                case ArrowKeyMode.RustFlashFocus:
-                    // Rust Flash Focus 模式（推薦）：
-                    // Rust DLL 在 <1ms 內完成 AttachThreadInput + SetFocus + SendInput + 還原焦點
-                    // Hook callback 在 Rust 原生碼中執行，不受 GC 影響
-                    if (rustKeyEngine != null && rustKeyEngine.IsRustAvailable)
-                    {
-                        int result = rustKeyEngine.FlashSendKey((ushort)key, isKeyDown);
-                        if (result != 0)
-                        {
-                            Debug.WriteLine($"[RustFlashFocus] 失敗 (錯誤碼: {result})，回退到 ThreadAttach");
-                            SendKeyWithThreadAttach(hWnd, key, isKeyDown);
-                        }
-                    }
-                    else
-                    {
-                        // Rust DLL 不可用，回退到 SendInputWithBlock
-                        keyboardBlocker?.RegisterPendingKey((uint)key);
-                        SendKeyWithSendInput(key, isKeyDown);
-                        ResendKeyToGame(hWnd, key, isKeyDown);
-                    }
+                    // 額外發送 PostMessage 以支援對話框視窗
+                    SendKeyToWindow(hWnd, key, isKeyDown);
                     break;
 
                 default:
@@ -1490,18 +1455,6 @@ namespace MapleStoryMacro
                     SendArrowKeyToChildWindow(hWnd, key, isKeyDown);
                     break;
             }
-        }
-
-        /// <summary>
-        /// 重送按鍵到遊戲視窗（Flash Focus）
-        /// </summary>
-        private void ResendKeyToGame(IntPtr hWnd, Keys key, bool isKeyDown)
-        {
-            if (!IsWindow(hWnd))
-                return;
-
-            // 委託給 SendKeyWithThreadAttach（已實作 Flash Focus）
-            SendKeyWithThreadAttach(hWnd, key, isKeyDown);
         }
 
         /// <summary>
@@ -1594,55 +1547,124 @@ namespace MapleStoryMacro
             return key == Keys.Alt || key == Keys.Menu || key == Keys.LMenu || key == Keys.RMenu;
         }
 
-        [DllImport("user32.dll")]
-        private static extern IntPtr GetForegroundWindow();
-
-        [DllImport("user32.dll")]
-        private static extern bool SetForegroundWindow(IntPtr hWnd);
-
         /// <summary>
-        /// 背景發送按鍵：
-        /// AttachThreadInput + SetFocus + SendInput（MACRO_KEY_MARKER）
-        /// Hook 攔截 WM_KEYDOWN 不讓前景收到，但 GetAsyncKeyState 已更新（遊戲透過 polling 讀取）
+        /// 使用 AttachThreadInput 方法發送方向鍵到背景視窗
         /// </summary>
         private void SendKeyWithThreadAttach(IntPtr hWnd, Keys key, bool isKeyDown, UIntPtr? extraInfo = null)
         {
-            // 優先使用 Rust 引擎（如果可用）
-            if (currentArrowKeyMode == ArrowKeyMode.RustFlashFocus && rustKeyEngine != null && rustKeyEngine.IsRustAvailable)
+            uint targetThreadId = GetWindowThreadProcessId(hWnd, out uint processId);
+            uint currentThreadId = GetCurrentThreadId();
+
+            bool attached = false;
+            try
             {
-                rustKeyEngine.FlashSendKey((ushort)key, isKeyDown);
-                return;
+                if (targetThreadId != currentThreadId)
+                {
+                    attached = AttachThreadInput(currentThreadId, targetThreadId, true);
+                }
+
+                if (attached)
+                {
+                    SetFocus(hWnd);
+                }
+
+
+                byte vkCode = (byte)key;
+                byte scanCode = GetScanCode(key);
+
+                uint flags = 0;
+                if (!isKeyDown)
+                {
+                    flags |= KEYEVENTF_KEYUP;
+                }
+                if (IsExtendedKey(key))
+                {
+                    flags |= KEYEVENTF_EXTENDEDKEY;
+                }
+
+                keybd_event(vkCode, scanCode, flags, extraInfo ?? UIntPtr.Zero);
             }
-
-            // C# 備援路徑：ATT + SetFocus + SendInput
-            IntPtr foreground = GetForegroundWindow();
-            if (hWnd != IntPtr.Zero && IsWindow(hWnd) && foreground != hWnd)
+            finally
             {
-                // 遊戲在背景：AttachThreadInput + SetFocus 讓遊戲共享輸入狀態
-                uint currentThread = GetCurrentThreadId();
-                uint gameThread = GetWindowThreadProcessId(hWnd, out _);
-                bool attached = AttachThreadInput(currentThread, gameThread, true);
-                if (attached) SetFocus(hWnd);
-
-                SendKeyWithSendInput(key, isKeyDown);
-
-                if (attached) AttachThreadInput(currentThread, gameThread, false);
-            }
-            else
-            {
-                // 遊戲在前景或無目標視窗：直接 SendInput
-                SendKeyWithSendInput(key, isKeyDown);
+                if (attached && targetThreadId != currentThreadId)
+                {
+                    AttachThreadInput(currentThreadId, targetThreadId, false);
+                }
             }
         }
 
         /// <summary>
-        /// 背景發送 Alt 鍵（Flash Focus）
+        /// 發送 Alt 鍵到背景視窗
         /// </summary>
         private void SendAltKeyToWindow(IntPtr hWnd, Keys key, bool isKeyDown)
         {
-            // 委託給 SendKeyWithThreadAttach（已實作 Flash Focus）
-            SendKeyWithThreadAttach(hWnd, key, isKeyDown);
-            AddLog($"Alt 按鍵(背景): {key}");
+            uint targetThreadId = GetWindowThreadProcessId(hWnd, out uint processId);
+            uint currentThreadId = GetCurrentThreadId();
+
+            bool attached = false;
+            try
+            {
+                if (targetThreadId != currentThreadId)
+                {
+                    attached = AttachThreadInput(currentThreadId, targetThreadId, true);
+                }
+
+                if (attached)
+                {
+                    SetFocus(hWnd);
+                }
+
+                // Alt 鍵使用對應的虛擬鍵碼
+                byte vkCode;
+                if (key == Keys.LMenu)
+                    vkCode = 0xA4; // VK_LMENU (左 Alt)
+                else if (key == Keys.RMenu)
+                    vkCode = 0xA5; // VK_RMENU (右 Alt)
+                else
+                    vkCode = 0x12; // VK_MENU (一般 Alt)
+
+                byte scanCode = 0x38; // Alt 的掃描碼
+
+                uint flags = 0;
+                if (!isKeyDown)
+                {
+                    flags |= KEYEVENTF_KEYUP;
+                }
+                // 右 Alt 需要延伸鍵旗標
+                if (key == Keys.RMenu)
+                {
+                    flags |= KEYEVENTF_EXTENDEDKEY;
+                }
+
+                keybd_event(vkCode, scanCode, flags, UIntPtr.Zero);
+
+                // 同時也嘗試用 PostMessage 發送
+                uint lParamValue;
+                if (isKeyDown)
+                {
+                    // context code = 1 表示 Alt 鍵
+                    lParamValue = 1u | ((uint)scanCode << 16) | (1u << 29);
+                    if (key == Keys.RMenu) lParamValue |= (1u << 24);
+                }
+                else
+                {
+                    lParamValue = 1u | ((uint)scanCode << 16) | (1u << 29) | (1u << 30) | (1u << 31);
+                    if (key == Keys.RMenu) lParamValue |= (1u << 24);
+                }
+
+                IntPtr lParam = (IntPtr)lParamValue;
+                uint msg = isKeyDown ? WM_SYSKEYDOWN : WM_SYSKEYUP;
+                PostMessage(hWnd, msg, (IntPtr)vkCode, lParam);
+
+                AddLog($"Alt 按鍵: VK=0x{vkCode:X2}, SC=0x{scanCode:X2}, 旗標=0x{flags:X}");
+            }
+            finally
+            {
+                if (attached && targetThreadId != currentThreadId)
+                {
+                    AttachThreadInput(currentThreadId, targetThreadId, false);
+                }
+            }
         }
 
         /// <summary>
@@ -1779,21 +1801,13 @@ namespace MapleStoryMacro
             }
         }
 
-        private void BtnStopPlayback_Click(object sender, EventArgs e)
+        private void BtnStopPlayback_Click(object? sender, EventArgs e)
         {
             if (isPlaying)
             {
                 statistics.EndSession();
             }
             
-            // 停用 Rust 引擎
-            if (rustKeyEngine != null)
-            {
-                rustKeyEngine.IsBlocking = false;
-                rustKeyEngine.Uninstall();
-                AddLog($"🦀 Rust 引擎已停用");
-            }
-
             // 停用 KeyboardBlocker
             if (keyboardBlocker != null)
             {
@@ -1810,10 +1824,10 @@ namespace MapleStoryMacro
             UpdateUI();
         }
 
-        private void Form1_FormClosing(object sender, FormClosingEventArgs e)
+        private void Form1_FormClosing(object? sender, FormClosingEventArgs e)
         {
             if (isRecording)
-                BtnStopRecording_Click(null, null);
+                BtnStopRecording_Click(this, EventArgs.Empty);
             if (isPlaying)
             {
                 statistics.EndSession();
@@ -1822,8 +1836,6 @@ namespace MapleStoryMacro
 
             keyboardHook?.Uninstall();
             hotkeyHook?.Uninstall();  // 停止全局熱鍵監聽
-            rustKeyEngine?.Uninstall();    // 停止 Rust 引擎
-            rustKeyEngine?.Dispose();
             keyboardBlocker?.Uninstall();  // 停止鍵盤阻擋器
             keyboardBlocker?.Dispose();
             monitorTimer?.Stop();
@@ -1849,7 +1861,7 @@ namespace MapleStoryMacro
                     if (!isPlaying && recordedEvents.Count > 0)
                     {
                         AddLog($"熱鍵觸發：開始播放 ({GetKeyDisplayName(playHotkey)})");
-                        BtnStartPlayback_Click(null, null);
+                        BtnStartPlayback_Click(this, EventArgs.Empty);
                     }
                 }));
             }
@@ -1861,7 +1873,7 @@ namespace MapleStoryMacro
                     if (isPlaying)
                     {
                         AddLog($"熱鍵觸發：停止播放 ({GetKeyDisplayName(stopHotkey)})");
-                        BtnStopPlayback_Click(null, null);
+                        BtnStopPlayback_Click(this, EventArgs.Empty);
                     }
                 }));
             }
@@ -1959,10 +1971,9 @@ namespace MapleStoryMacro
             // 方向鍵模式選項
             var availableModes = new (ArrowKeyMode mode, string name)[]
             {
-                (ArrowKeyMode.RustFlashFocus, "🦀 Rust FF (推薦)"),
                 (ArrowKeyMode.SendToChild, "S2C (背景)"),
                 (ArrowKeyMode.ThreadAttachWithBlocker, "TAB"),
-                (ArrowKeyMode.SendInputWithBlock, "SWB")
+                (ArrowKeyMode.SendInputWithBlock, "SWB (推薦)")
             };
 
      foreach (var mode in availableModes)
@@ -1977,7 +1988,7 @@ namespace MapleStoryMacro
             // 方向鍵模式說明
             Label lblArrowHint = new Label
             {
-                Text = "🦀 Rust FF=Flash Focus推薦 | S2C=背景 | TAB=TA+Blocker | SWB=SI+Blocker",
+                Text = "S2C=背景 | TAB=TA+Blocker | SWB=SendInput+Blocker",
                 Left = 20,
                 Top = 180,
                 Width = 400,
@@ -2206,8 +2217,7 @@ namespace MapleStoryMacro
             {
                 if (dgv.CurrentCell.ColumnIndex == dgv.Columns["KeyCode"].Index)
                 {
-                    TextBox tb = args.Control as TextBox;
-                    if (tb != null)
+            if (args.Control is TextBox tb)
                     {
                         // 移除舊的事件處理器
                         tb.KeyDown -= CustomKeyCell_KeyDown;
@@ -2576,7 +2586,7 @@ namespace MapleStoryMacro
             return Environment.TickCount / 1000.0;
         }
 
-        private void Form1_Load(object sender, EventArgs e)
+        private void Form1_Load(object? sender, EventArgs e)
         {
             lblStatus.Text = "就緒：點擊「開始錄製」開始";
             lblRecordingStatus.Text = "錄製：尚未開始";
@@ -2587,19 +2597,19 @@ namespace MapleStoryMacro
         public class MacroEvent
         {
             public Keys KeyCode { get; set; }
-            public string EventType { get; set; }
+            public string EventType { get; set; } = "down";
             public double Timestamp { get; set; }
         }
 
         /// <summary>
         /// 儲存設定按鈕點擊事件
         /// </summary>
-        private void btnSaveSettings_Click(object sender, EventArgs e)
+        private void btnSaveSettings_Click(object? sender, EventArgs e)
         {
             ExportSettings();
         }
 
-        private void btnImportSettings_Click(object sender, EventArgs e)
+        private void btnImportSettings_Click(object? sender, EventArgs e)
         {
             ImportSettings();
         }
@@ -2688,7 +2698,7 @@ namespace MapleStoryMacro
         {
             var settings = BuildSettings();
 
-            string directory = Path.GetDirectoryName(filePath);
+            string? directory = Path.GetDirectoryName(filePath);
             if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
             {
                 Directory.CreateDirectory(directory);

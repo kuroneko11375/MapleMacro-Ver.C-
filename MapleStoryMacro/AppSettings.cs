@@ -36,11 +36,6 @@ namespace MapleStoryMacro
         public int ArrowKeyMode { get; set; } = 3;
 
         /// <summary>
-        /// 璉春ち传家Α
-        /// </summary>
-        public int BackgroundSwitchMode { get; set; } = 3;
-
-        /// <summary>
         /// 程更竲セ隔畖よ獽Ω笆更
         /// </summary>
         public string? LastScriptPath { get; set; }

@@ -13,6 +13,7 @@ namespace MapleStoryMacro
         #region Windows API
 
         private const int WH_KEYBOARD_LL = 13;
+        private const int WH_GETMESSAGE = 3;
         private const int WM_KEYDOWN = 0x0100;
         private const int WM_KEYUP = 0x0101;
         private const int WM_SYSKEYDOWN = 0x0104;
@@ -33,6 +34,9 @@ namespace MapleStoryMacro
         [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         private static extern IntPtr GetModuleHandle(string lpModuleName);
 
+        [DllImport("kernel32.dll")]
+        private static extern uint GetCurrentThreadId();
+
         [StructLayout(LayoutKind.Sequential)]
         private struct KBDLLHOOKSTRUCT
         {
@@ -43,19 +47,45 @@ namespace MapleStoryMacro
             public UIntPtr dwExtraInfo;
         }
 
+        [StructLayout(LayoutKind.Sequential)]
+        private struct POINT
+        {
+            public int x;
+            public int y;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct MSG
+        {
+            public IntPtr hwnd;
+            public uint message;
+            public IntPtr wParam;
+            public IntPtr lParam;
+            public uint time;
+            public POINT pt;
+        }
+
         #endregion
 
         private IntPtr _hookHandle = IntPtr.Zero;
-        private LowLevelKeyboardProc _hookProc;
+        private readonly LowLevelKeyboardProc _hookProc;
+        private readonly KeyboardHookMode _mode;
 
         /// <summary>
         /// 鍵盤事件回調 - 參數為 (Keys keyCode, bool isKeyDown)
         /// </summary>
+        public enum KeyboardHookMode
+        {
+            LowLevel,
+            GetMessage
+        }
+
         public event Action<Keys, bool>? OnKeyEvent;
 
-        public KeyboardHookDLL()
+        public KeyboardHookDLL(KeyboardHookMode mode = KeyboardHookMode.LowLevel)
         {
             // 保存委派參考，避免被 GC 回收
+            _mode = mode;
             _hookProc = HookCallback;
         }
 
@@ -74,11 +104,14 @@ namespace MapleStoryMacro
             using (Process curProcess = Process.GetCurrentProcess())
             using (ProcessModule curModule = curProcess.MainModule!)
             {
+                int hookId = _mode == KeyboardHookMode.GetMessage ? WH_GETMESSAGE : WH_KEYBOARD_LL;
+                uint threadId = _mode == KeyboardHookMode.GetMessage ? GetCurrentThreadId() : 0;
+
                 _hookHandle = SetWindowsHookEx(
-                    WH_KEYBOARD_LL,
+                    hookId,
                     _hookProc,
                     GetModuleHandle(curModule.ModuleName),
-                    0);
+                    threadId);
             }
 
             if (_hookHandle == IntPtr.Zero)
@@ -112,18 +145,32 @@ namespace MapleStoryMacro
         {
             if (nCode >= 0)
             {
-                int msg = (int)wParam;
-
-                // 只處理按鍵訊息
-                if (msg == WM_KEYDOWN || msg == WM_KEYUP ||
-                    msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP)
+                if (_mode == KeyboardHookMode.GetMessage)
                 {
-                    KBDLLHOOKSTRUCT hookStruct = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
-                    Keys keyCode = (Keys)hookStruct.vkCode;
-                    bool isKeyDown = (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN);
+                    MSG msg = Marshal.PtrToStructure<MSG>(lParam);
+                    if (msg.message == WM_KEYDOWN || msg.message == WM_KEYUP ||
+                        msg.message == WM_SYSKEYDOWN || msg.message == WM_SYSKEYUP)
+                    {
+                        Keys keyCode = (Keys)msg.wParam;
+                        bool isKeyDown = (msg.message == WM_KEYDOWN || msg.message == WM_SYSKEYDOWN);
+                        OnKeyEvent?.Invoke(keyCode, isKeyDown);
+                    }
+                }
+                else
+                {
+                    int msg = (int)wParam;
 
-                    // 觸發事件
-                    OnKeyEvent?.Invoke(keyCode, isKeyDown);
+                    // 只處理按鍵訊息
+                    if (msg == WM_KEYDOWN || msg == WM_KEYUP ||
+                        msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP)
+                    {
+                        KBDLLHOOKSTRUCT hookStruct = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
+                        Keys keyCode = (Keys)hookStruct.vkCode;
+                        bool isKeyDown = (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN);
+
+                        // 觸發事件
+                        OnKeyEvent?.Invoke(keyCode, isKeyDown);
+                    }
                 }
             }
 
