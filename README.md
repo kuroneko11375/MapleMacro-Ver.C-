@@ -27,8 +27,6 @@
 ### ⌨️ 方向鍵發送模式（四種可選）
   | 模式 | 說明 |
   |------|------|
-  | **Rust FF (推薦)** | Rust DLL Flash Focus，混合 SendInput + PostMessage，最穩定 |
-  | **S2C (背景)** | ThreadAttach + PostMessage，純背景走路用 |
   | **TAB** | ThreadAttach + Blocker，嘗試避免影響前景 |
   | **SWB** | SendInput + Blocker |
 
@@ -88,12 +86,7 @@
 
 ## 📅 更新紀錄
 
-### 2025/02/08 (v1.1.1)
-* 新增 **Rust DLL 引擎**（`macro_core.dll`）— 背景按鍵發送核心
-* 背景按鍵改為 **混合策略**：方向鍵用 SendInput、英數鍵用 PostMessage
-* 預設模式改為 **Rust FF（推薦）**
-
-### 2025/02/06 (v1.1.0)
+### 2026/02/06 (v1.1.0)
 * 新增 **自定義按鍵系統**（15 格槽位）
 * 改用 **SendInput API** 作為前景模式主要發送方式（更可靠）
 * 預設方向鍵模式改為 **SWB（推薦）**
