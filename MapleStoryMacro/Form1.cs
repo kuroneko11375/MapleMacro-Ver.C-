@@ -461,6 +461,12 @@ namespace MapleStoryMacro
             string playStatus = isPlaying ? "▶️" : "⏹️";
 
             lblStatus.Text = $"{recStatus} 錄製 | {playStatus} 播放 | 模式: {bgMode} | 事件: {recordedEvents.Count}";
+
+            // 即時顯示 Hook 運作中
+            if (isPlaying && keyboardBlocker != null)
+            {
+                lblStatus.Text += $" | Hook 運作中";
+            }
         }
 
         private void Form1_KeyDown(object? sender, KeyEventArgs e)
@@ -1509,10 +1515,10 @@ namespace MapleStoryMacro
             {
                 if (targetWindowHandle != IntPtr.Zero && IsWindow(targetWindowHandle))
                 {
-                    // 背景模式
-                    SendKeyToWindow(targetWindowHandle, key, true);  // 按下
+                    // 背景模式：統一走 SendKeyWithThreadAttach
+                    SendKeyWithThreadAttach(targetWindowHandle, key, true);   // 按下
                     Thread.Sleep(30);
-                    SendKeyToWindow(targetWindowHandle, key, false); // 放開
+                    SendKeyWithThreadAttach(targetWindowHandle, key, false);  // 放開
                 }
                 else
                 {
@@ -1747,7 +1753,6 @@ namespace MapleStoryMacro
                 {
                     SetFocus(hWnd);
                 }
-
 
                 byte vkCode = (byte)key;
                 byte scanCode = GetScanCode(key);
@@ -1987,7 +1992,6 @@ namespace MapleStoryMacro
             {
                 statistics.EndSession();
             }
-
             // 停用 KeyboardBlocker
             if (keyboardBlocker != null)
             {
