@@ -6,17 +6,15 @@ using System.Runtime.InteropServices;
 namespace MapleStoryMacro
 {
     /// <summary>
-    /// 鍵盤阻擋器 - 使用 Low-Level Keyboard Hook 過濾巨集發送的按鍵
+    /// 鍵盤阻擋器 - 使用 Low-Level Keyboard Hook 條件式攔截巨集按鍵
     /// 
-    /// 工作原理（純攔截模式）：
+    /// 工作原理（條件式攔截）：
     /// 1. 檢測帶有 MACRO_KEY_MARKER 標記的按鍵 (dwExtraInfo)
     /// 2. 檢測 LLKHF_INJECTED 旗標（程式注入的按鍵）
     /// 3. 時間戳記追蹤（100ms 內發送的按鍵）
-    /// 4. 如果前景視窗是遊戲 → 放行
-    /// 5. 如果前景視窗不是遊戲 → 純攔截（不重送，重送由 Form1 負責）
-    /// 
-    /// 重入防護：Form1 使用 BeginResend/EndResend 包裹 keybd_event，
-    /// 讓 Blocker 放行重送的按鍵。
+    /// 4. 遊戲前景 → 攔截（return 1），防止重複處理
+    /// 5. 遊戲背景 → 放行（CallNextHookEx），確保 key state 更新，
+    ///    否則 GetKeyState/GetAsyncKeyState 偵測不到按鍵
     /// </summary>
     public class KeyboardBlocker : IDisposable
     {
@@ -36,9 +34,6 @@ namespace MapleStoryMacro
         private bool _isBlocking = false;
         private bool _disposed = false;
         
-        // 重入防護 - Form1 使用 BeginResend/EndResend 設定，讓重送的 keybd_event 不被攔截
-        private volatile bool _isResending = false;
-
         // 目標視窗句柄 - 遊戲視窗
         public IntPtr TargetWindowHandle { get; set; } = IntPtr.Zero;
 
@@ -170,24 +165,7 @@ namespace MapleStoryMacro
             PassedKeyCount = 0;
             _pendingKeys.Clear();
         }
-        
-        /// <summary>
-        /// 開始重送模式 - 設定重入防護，讓後續的 keybd_event 不被攔截
-        /// 必須與 EndResend 配對使用
-        /// </summary>
-        public void BeginResend()
-        {
-            _isResending = true;
-        }
-        
-        /// <summary>
-        /// 結束重送模式 - 解除重入防護
-        /// </summary>
-        public void EndResend()
-        {
-            _isResending = false;
-        }
-        
+
         /// <summary>
         /// 註冊即將發送的按鍵（用於時間戳記追蹤）
         /// </summary>
@@ -228,9 +206,9 @@ namespace MapleStoryMacro
         }
 
         /// <summary>
-        /// 鉤子回調函數 - 條件攔截模式
-        /// 遊戲是前景 → 放行（WM_KEYDOWN 送到遊戲）
-        /// 遊戲不是前景 → 攔截（保護 Chrome，遊戲透過 PostMessage 收到 WM_KEYDOWN）
+        /// 鉤子回調函數 - 條件式攔截
+        /// 遊戲前景 → 攔截巨集按鍵（防止重複處理）
+        /// 遊戲背景 → 放行巨集按鍵（key state 必須更新，否則 GetKeyState 失效）
         /// </summary>
         private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
         {
@@ -244,26 +222,29 @@ namespace MapleStoryMacro
                 {
                     KBDLLHOOKSTRUCT hookStruct = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
                     
-                    // ★ Marker 標記的按鍵
+                    // ★ Marker 標記的按鍵 → 條件式處理
                     if (UseMarkerDetection)
                     {
                         ulong extraInfo = hookStruct.dwExtraInfo.ToUInt64();
                         if (extraInfo == MACRO_KEY_MARKER)
                         {
-                            // 遊戲是前景 → 放行（WM_KEYDOWN 送到遊戲）
-                            if (IsGameForeground())
+                            bool isFg = IsGameForeground();
+                            if (isFg)
                             {
+                                // 遊戲前景 → 攔截，防止重複處理
+                                BlockedKeyCount++;
+                                if (DebugMode)
+                                    Debug.WriteLine($"[Blocker] 攔截(Marker): VK=0x{hookStruct.vkCode:X2}, 遊戲前景=true");
+                                return (IntPtr)1;
+                            }
+                            else
+                            {
+                                // 遊戲背景 → 放行，key state 必須更新
                                 PassedKeyCount++;
+                                if (DebugMode)
+                                    Debug.WriteLine($"[Blocker] 放行(Marker): VK=0x{hookStruct.vkCode:X2}, 遊戲前景=false");
                                 return CallNextHookEx(_hookHandle, nCode, wParam, lParam);
                             }
-                            // 遊戲不是前景 → 攔截（保護 Chrome）
-                            // 遊戲透過 PostMessage 收到 WM_KEYDOWN（繞過 LL hook）
-                            BlockedKeyCount++;
-                            if (DebugMode)
-                            {
-                                Debug.WriteLine($"[Blocker] ★ 攔截(Marker): VK=0x{hookStruct.vkCode:X2}");
-                            }
-                            return (IntPtr)1;
                         }
                     }
                     
@@ -307,23 +288,29 @@ namespace MapleStoryMacro
         }
         
         /// <summary>
-        /// 處理識別為巨集的按鍵 — 根據前景狀態決定放行或攔截
+        /// 處理識別為巨集的按鍵 — 條件式攔截
+        /// 遊戲前景 → 攔截（防止重複處理）
+        /// 遊戲背景 → 放行（key state 必須更新）
         /// </summary>
         private IntPtr HandleMacroKey(KBDLLHOOKSTRUCT hookStruct, int msg, int origNCode, IntPtr origWParam, IntPtr origLParam, string detectionMethod)
         {
-            // 遊戲是前景 → 放行
-            if (IsGameForeground())
+            bool isFg = IsGameForeground();
+            if (isFg)
             {
+                // 遊戲前景 → 攔截，防止重複處理
+                BlockedKeyCount++;
+                if (DebugMode)
+                    Debug.WriteLine($"[Blocker] 攔截({detectionMethod}): VK=0x{hookStruct.vkCode:X2}, 遊戲前景=true");
+                return (IntPtr)1;
+            }
+            else
+            {
+                // 遊戲背景 → 放行，key state 必須更新
                 PassedKeyCount++;
+                if (DebugMode)
+                    Debug.WriteLine($"[Blocker] 放行({detectionMethod}): VK=0x{hookStruct.vkCode:X2}, 遊戲前景=false");
                 return CallNextHookEx(_hookHandle, origNCode, origWParam, origLParam);
             }
-            // 遊戲不是前景 → 攔截
-            BlockedKeyCount++;
-            if (DebugMode)
-            {
-                Debug.WriteLine($"[Blocker] ★ 攔截: VK=0x{hookStruct.vkCode:X2} ({detectionMethod})");
-            }
-            return (IntPtr)1;
         }
         
         /// <summary>

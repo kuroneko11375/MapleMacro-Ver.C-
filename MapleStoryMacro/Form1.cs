@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Drawing;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using System.Windows.Forms;
 using System.IO;
@@ -14,10 +15,13 @@ namespace MapleStoryMacro
     {
         private List<MacroEvent> recordedEvents = new List<MacroEvent>();
         private bool isRecording = false;
-        private bool isPlaying = false;
+        private volatile bool isPlaying = false;
         private double recordStartTime = 0;
         private IntPtr targetWindowHandle = IntPtr.Zero;
         private KeyboardHookDLL keyboardHook;
+
+        // 高精度計時器（取代 Environment.TickCount，精度從 ~15ms 提升至 ~1μs）
+        private readonly Stopwatch highResTimer = Stopwatch.StartNew();
 
         // 全局熱鍵設定
         private Keys playHotkey = Keys.F9;      // 預設播放熱鍵
@@ -42,6 +46,10 @@ namespace MapleStoryMacro
         private int lastLogRepeatCount = 0; // 重複計數
 
         private HashSet<Keys> pressedKeys = new HashSet<Keys>();
+
+        // 按鍵最短持續時間（確保遊戲能偵測到按鍵）
+        private const double MIN_KEY_HOLD_SECONDS = 0.05; // ~50ms，確保遊戲至少輪詢 2-3 次（60fps ≈ 16ms/次）
+        private readonly Dictionary<Keys, double> lastKeyDownTimestamp = new Dictionary<Keys, double>();
 
         // 當前腳本路徑
         private string? currentScriptPath = null;
@@ -68,6 +76,32 @@ namespace MapleStoryMacro
 
         [DllImport("kernel32.dll")]
         private static extern uint GetCurrentThreadId();
+
+        // 架構檢測 API
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool IsWow64Process(IntPtr hProcess, out bool Wow64Process);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, uint dwProcessId);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool CloseHandle(IntPtr hObject);
+
+        private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+        private const uint PROCESS_QUERY_INFORMATION = 0x0400;
+        private const uint PROCESS_VM_READ = 0x0010;
+
+        // 進程路徑與模組列舉 API（用於診斷）
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern bool QueryFullProcessImageName(IntPtr hProcess, uint dwFlags, StringBuilder lpExeName, ref uint lpdwSize);
+
+        [DllImport("psapi.dll", SetLastError = true)]
+        private static extern bool EnumProcessModulesEx(IntPtr hProcess, IntPtr[] lphModule, uint cb, out uint lpcbNeeded, uint dwFilterFlag);
+
+        [DllImport("psapi.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern uint GetModuleBaseName(IntPtr hProcess, IntPtr hModule, StringBuilder lpBaseName, uint nSize);
+
+        private const uint LIST_MODULES_ALL = 0x03;
 
         [DllImport("user32.dll")]
         private static extern IntPtr SetFocus(IntPtr hWnd);
@@ -141,9 +175,9 @@ namespace MapleStoryMacro
         {
             SendToChild,            // ThreadAttach + PostMessage（背景走路用）
             ThreadAttachWithBlocker, // ThreadAttach + Blocker（嘗試避免影響前景）
-            SendInputWithBlock      // SendInput + Blocker（嘗試避免影響前景）
+            SendInputWithBlock,     // SendInput + Blocker（嘗試避免影響前景）
         }
-        private ArrowKeyMode currentArrowKeyMode = ArrowKeyMode.SendInputWithBlock;
+        private ArrowKeyMode currentArrowKeyMode = ArrowKeyMode.SendToChild;
         
         // 鍵盤阻擋器（用於 Blocker 模式）
         private KeyboardBlocker? keyboardBlocker;
@@ -161,71 +195,71 @@ namespace MapleStoryMacro
         private static readonly Dictionary<Keys, string> KeyDisplayNames = new Dictionary<Keys, string>
         {
             // 符號鍵 - Shift 時會變成 <> 等符號
-  { Keys.OemPeriod, ". (>)" },      // . 和 >
-      { Keys.Oemcomma, ", (<)" },       // , 和 <
-            { Keys.OemQuestion, "/ (?)" },  // / 和 ?
-     { Keys.OemSemicolon, "; (:)" },   // ; 和 :
-            { Keys.OemQuotes, "' (\")" },     // ' 和 "
-            { Keys.OemOpenBrackets, "[ ({)" }, // [ 和 {
-            { Keys.OemCloseBrackets, "] (})" }, // ] 和 }
-      { Keys.OemBackslash, "\\ (|)" },  // \ 和 |
- { Keys.OemMinus, "- (_)" },    // - 和 _
-{ Keys.Oemplus, "= (+)" },        // = 和 +
-    { Keys.Oemtilde, "` (~)" },     // ` 和 ~
-            { Keys.OemPipe, "\\ (|)" },       // \ 和 |
+            { Keys.OemPeriod, ". (>)" },
+            { Keys.Oemcomma, ", (<)" },
+            { Keys.OemQuestion, "/ (?)" },
+            { Keys.OemSemicolon, "; (:)" },
+            { Keys.OemQuotes, "' (\")" },
+            { Keys.OemOpenBrackets, "[ ({)" },
+            { Keys.OemCloseBrackets, "] (})" },
+            { Keys.OemBackslash, "\\ (|)" },
+            { Keys.OemMinus, "- (_)" },
+            { Keys.Oemplus, "= (+)" },
+            { Keys.Oemtilde, "` (~)" },
+            { Keys.OemPipe, "\\ (|)" },
             // 常用功能鍵
- { Keys.Space, "空白鍵" },
+            { Keys.Space, "空白鍵" },
             { Keys.Enter, "Enter" },
-  { Keys.Escape, "Esc" },
-        { Keys.Tab, "Tab" },
-      { Keys.Back, "Backspace" },
-    { Keys.Delete, "Delete" },
-    { Keys.Insert, "Insert" },
+            { Keys.Escape, "Esc" },
+            { Keys.Tab, "Tab" },
+            { Keys.Back, "Backspace" },
+            { Keys.Delete, "Delete" },
+            { Keys.Insert, "Insert" },
             { Keys.Home, "Home" },
             { Keys.End, "End" },
             { Keys.PageUp, "Page Up" },
-       { Keys.PageDown, "Page Down" },
- // 方向鍵
+            { Keys.PageDown, "Page Down" },
+            // 方向鍵
             { Keys.Left, "← 左" },
-       { Keys.Right, "→ 右" },
-        { Keys.Up, "↑ 上" },
+            { Keys.Right, "→ 右" },
+            { Keys.Up, "↑ 上" },
             { Keys.Down, "↓ 下" },
-  // 修飾鍵
-        { Keys.LShiftKey, "左 Shift" },
-     { Keys.RShiftKey, "右 Shift" },
+            // 修飾鍵
+            { Keys.LShiftKey, "左 Shift" },
+            { Keys.RShiftKey, "右 Shift" },
             { Keys.ShiftKey, "Shift" },
             { Keys.LControlKey, "左 Ctrl" },
-          { Keys.RControlKey, "右 Ctrl" },
-       { Keys.ControlKey, "Ctrl" },
- { Keys.LMenu, "左 Alt" },
-  { Keys.RMenu, "右 Alt" },
-    { Keys.Menu, "Alt" },
-     { Keys.Alt, "Alt" },
-       { Keys.LWin, "左 Win" },
+            { Keys.RControlKey, "右 Ctrl" },
+            { Keys.ControlKey, "Ctrl" },
+            { Keys.LMenu, "左 Alt" },
+            { Keys.RMenu, "右 Alt" },
+            { Keys.Menu, "Alt" },
+            { Keys.Alt, "Alt" },
+            { Keys.LWin, "左 Win" },
             { Keys.RWin, "右 Win" },
             // 數字鍵盤
             { Keys.NumPad0, "Num 0" },
-       { Keys.NumPad1, "Num 1" },
-      { Keys.NumPad2, "Num 2" },
-        { Keys.NumPad3, "Num 3" },
-         { Keys.NumPad4, "Num 4" },
-  { Keys.NumPad5, "Num 5" },
+            { Keys.NumPad1, "Num 1" },
+            { Keys.NumPad2, "Num 2" },
+            { Keys.NumPad3, "Num 3" },
+            { Keys.NumPad4, "Num 4" },
+            { Keys.NumPad5, "Num 5" },
             { Keys.NumPad6, "Num 6" },
-         { Keys.NumPad7, "Num 7" },
+            { Keys.NumPad7, "Num 7" },
             { Keys.NumPad8, "Num 8" },
-         { Keys.NumPad9, "Num 9" },
+            { Keys.NumPad9, "Num 9" },
             { Keys.Multiply, "Num *" },
- { Keys.Add, "Num +" },
-       { Keys.Subtract, "Num -" },
+            { Keys.Add, "Num +" },
+            { Keys.Subtract, "Num -" },
             { Keys.Decimal, "Num ." },
             { Keys.Divide, "Num /" },
             { Keys.NumLock, "Num Lock" },
             // 其他
- { Keys.CapsLock, "Caps Lock" },
+            { Keys.CapsLock, "Caps Lock" },
             { Keys.PrintScreen, "Print Screen" },
             { Keys.Scroll, "Scroll Lock" },
             { Keys.Pause, "Pause" },
-   };
+        };
 
         /// <summary>
         /// 取得按鍵的顯示名稱（更直觀的中文名稱）
@@ -236,7 +270,6 @@ namespace MapleStoryMacro
                 return displayName ?? key.ToString();
             return key.ToString();
         }
-
 
         public Form1()
         {
@@ -432,7 +465,8 @@ namespace MapleStoryMacro
 
         private void Form1_KeyDown(object? sender, KeyEventArgs e)
         {
-            if (isRecording)
+            // 當鍵盤鉤子啟用時，不重複錄製（避免雙重事件）
+            if (isRecording && keyboardHook != null && !keyboardHook.IsInstalled)
             {
                 if (recordStartTime == 0)
                     recordStartTime = GetCurrentTime();
@@ -451,7 +485,8 @@ namespace MapleStoryMacro
 
         private void Form1_KeyUp(object? sender, KeyEventArgs e)
         {
-            if (isRecording)
+            // 當鍵盤鉤子啟用時，不重複錄製（避免雙重事件）
+            if (isRecording && keyboardHook != null && !keyboardHook.IsInstalled)
             {
                 recordedEvents.Add(new MacroEvent
                 {
@@ -538,7 +573,14 @@ namespace MapleStoryMacro
                 {
                     if (!string.IsNullOrEmpty(p.MainWindowTitle) && IsWindow(p.MainWindowHandle))
                     {
-                        listBox.Items.Add(new ProcessItem { Handle = p.MainWindowHandle, Title = $"{p.MainWindowTitle} (PID: {p.Id})" });
+                        bool is32 = IsProcess32Bit((uint)p.Id);
+                        string arch = is32 ? "32-bit" : "64-bit";
+                        listBox.Items.Add(new ProcessItem
+                        {
+                            Handle = p.MainWindowHandle,
+                            Title = $"{p.MainWindowTitle} [{arch}] (PID: {p.Id})",
+                            Is32Bit = is32
+                        });
                     }
                 }
                 catch { }
@@ -612,6 +654,45 @@ namespace MapleStoryMacro
         {
             public IntPtr Handle { get; set; }
             public string Title { get; set; } = string.Empty;
+            public bool Is32Bit { get; set; }
+        }
+
+        /// <summary>
+        /// 檢測目標進程是否為 32 位元
+        /// </summary>
+        private static bool IsProcess32Bit(uint processId)
+        {
+            // 如果在 32 位元 OS 上，所有進程都是 32 位元
+            if (!Environment.Is64BitOperatingSystem)
+                return true;
+
+            IntPtr hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, processId);
+            if (hProcess == IntPtr.Zero)
+                return false; // 無法開啟，假設未知
+
+            try
+            {
+                if (IsWow64Process(hProcess, out bool isWow64))
+                {
+                    // WoW64 = 32 位元進程在 64 位元 OS 上執行
+                    return isWow64;
+                }
+                return false;
+            }
+            finally
+            {
+                CloseHandle(hProcess);
+            }
+        }
+
+        /// <summary>
+        /// 透過視窗控制代碼檢測進程是否為 32 位元
+        /// </summary>
+        private static bool IsWindowProcess32Bit(IntPtr hWnd)
+        {
+            GetWindowThreadProcessId(hWnd, out uint processId);
+            if (processId == 0) return false;
+            return IsProcess32Bit(processId);
         }
 
         private void FindGameWindow()
@@ -639,9 +720,11 @@ namespace MapleStoryMacro
         {
             if (targetWindowHandle != IntPtr.Zero && IsWindow(targetWindowHandle))
             {
-                lblWindowStatus.Text = $"視窗: 已鎖定 - 背景模式";
+                bool is32 = IsWindowProcess32Bit(targetWindowHandle);
+                string arch = is32 ? "32-bit" : "64-bit";
+                lblWindowStatus.Text = $"視窗: 已鎖定 [{arch}] - 背景模式";
                 lblWindowStatus.ForeColor = Color.Green;
-                AddLog($"已鎖定視窗: {targetWindowHandle}");
+                AddLog($"已鎖定視窗: {targetWindowHandle} [{arch}]");
             }
             else
             {
@@ -650,7 +733,6 @@ namespace MapleStoryMacro
                 targetWindowHandle = IntPtr.Zero;
                 AddLog("未找到目標視窗");
             }
-
         }
 
         private void ReleasePressedKeys()
@@ -886,12 +968,11 @@ namespace MapleStoryMacro
 
             // 顯示警告視窗
             DialogResult result = MessageBox.Show(
-             $"確定要清除所有 {recordedEvents.Count} 個事件嗎？\n\n此操作無法復原！",
-                 "⚠️ 警告 - 清除所有事件",
-            MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Warning,
-           MessageBoxDefaultButton.Button2  // 預設選擇「否」
-            );
+                $"確定要清除所有 {recordedEvents.Count} 個事件嗎？\n\n此操作無法復原！",
+                "⚠️ 警告 - 清除所有事件",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning,
+                MessageBoxDefaultButton.Button2);
 
             if (result == DialogResult.Yes)
             {
@@ -1135,6 +1216,7 @@ namespace MapleStoryMacro
             isPlaying = true;
 
             pressedKeys.Clear();
+            lock (lastKeyDownTimestamp) { lastKeyDownTimestamp.Clear(); }
 
             // 重置自定義按鍵槽位的觸發狀態
             foreach (var slot in customKeySlots)
@@ -1145,9 +1227,11 @@ namespace MapleStoryMacro
             // 開始統計
             statistics.StartSession();
 
-            // 如果使用 Blocker 模式，初始化並啟動 KeyboardBlocker
-            if (currentArrowKeyMode == ArrowKeyMode.ThreadAttachWithBlocker || 
-                currentArrowKeyMode == ArrowKeyMode.SendInputWithBlock)
+            // 如果使用 Blocker 模式且有目標視窗（背景模式），才初始化並啟動 KeyboardBlocker
+            // 前景模式不需要 Blocker，避免安裝不必要的低層鍵盤鉤子
+            if ((currentArrowKeyMode == ArrowKeyMode.ThreadAttachWithBlocker || 
+                currentArrowKeyMode == ArrowKeyMode.SendInputWithBlock) &&
+                targetWindowHandle != IntPtr.Zero)
             {
                 if (keyboardBlocker == null)
                 {
@@ -1160,7 +1244,7 @@ namespace MapleStoryMacro
             }
 
             string mode = (targetWindowHandle != IntPtr.Zero) ? "背景" : "前景";
-            AddLog($"播放開始 ({mode}模式)...");
+            AddLog($"播放開始 ({mode}模式, 方向鍵={currentArrowKeyMode})...");
 
             // 顯示啟用的自定義按鍵
             int enabledCount = customKeySlots.Count(s => s.Enabled);
@@ -1172,7 +1256,9 @@ namespace MapleStoryMacro
             try
             {
                 int loopCount = (int)numPlayTimes.Value;
-                Thread playbackThread = new Thread(() => PlaybackThread(loopCount))
+                // 建立事件快照，避免播放線程與 UI 線程競爭存取 recordedEvents
+                var eventsSnapshot = recordedEvents.ToList();
+                Thread playbackThread = new Thread(() => PlaybackThread(loopCount, eventsSnapshot))
                 {
                     IsBackground = true
                 };
@@ -1189,47 +1275,124 @@ namespace MapleStoryMacro
             UpdateUI();
         }
 
-        private void PlaybackThread(int loopCount)
+        private void PlaybackThread(int loopCount, List<MacroEvent> events)
         {
+            bool firstKeySent = false;
             try
             {
+                string mode = (targetWindowHandle != IntPtr.Zero) ? "背景" : "前景";
+                this.BeginInvoke(new Action(() => AddLog($"播放線程已啟動 ({mode}模式, {events.Count} 事件, {loopCount} 循環)")));
+
                 for (int loop = 1; loop <= loopCount && isPlaying; loop++)
                 {
                     statistics.IncrementLoop();
 
-                    this.Invoke(new Action(() =>
+                    int currentLoop = loop; // 避免閉包捕獲迴圈變數
+                    this.BeginInvoke(new Action(() =>
                     {
-                        lblPlaybackStatus.Text = $"循環: {loop}/{loopCount}";
+                        lblPlaybackStatus.Text = $"循環: {currentLoop}/{loopCount}";
                         lblPlaybackStatus.ForeColor = Color.Blue;
+                        if (currentLoop == 1 || currentLoop % 10 == 0)
+                            AddLog($"循環 {currentLoop}/{loopCount} 開始");
                     }));
 
                     double lastTimestamp = 0;
-                    DateTime loopStartTime = DateTime.Now;
+                    long loopStartTick = Stopwatch.GetTimestamp();
+                    long lastCustomKeyCheckTick = loopStartTick;
 
-                    foreach (MacroEvent evt in recordedEvents)
+                    foreach (MacroEvent evt in events)
                     {
                         if (!isPlaying) break;
 
                         double waitTime = evt.Timestamp - lastTimestamp;
+
+                        // ★ 最短按鍵持續時間保護：如果是 keyup 且對應的 keydown 間隔太短，
+                        // 強制等待至少 MIN_KEY_HOLD_SECONDS，確保遊戲能偵測到
+                        if (evt.EventType == "up" && waitTime < MIN_KEY_HOLD_SECONDS)
+                        {
+                            double holdTime;
+                            lock (lastKeyDownTimestamp)
+                            {
+                                if (lastKeyDownTimestamp.TryGetValue(evt.KeyCode, out double downTs))
+                                {
+                                    holdTime = evt.Timestamp - downTs;
+                                }
+                                else
+                                {
+                                    holdTime = waitTime;
+                                }
+                            }
+                            if (holdTime < MIN_KEY_HOLD_SECONDS)
+                            {
+                                waitTime = Math.Max(waitTime, MIN_KEY_HOLD_SECONDS - holdTime + waitTime);
+                            }
+                        }
+
                         if (waitTime > 0)
                         {
-                            // 在等待期間檢查自定義按鍵
-                            int waitMs = (int)(waitTime * 1000);
-                            int elapsed = 0;
-                            while (elapsed < waitMs && isPlaying)
-                            {
-                                int sleepTime = Math.Min(50, waitMs - elapsed); // 每 50ms 檢查一次
-                                Thread.Sleep(sleepTime);
-                                elapsed += sleepTime;
+                            // 高精度等待：混合 Sleep + Spin-wait
+                            long waitStartTick = Stopwatch.GetTimestamp();
+                            double waitSeconds = waitTime;
 
-                                // 檢查並觸發自定義按鍵
-                                double currentScriptTime = (DateTime.Now - loopStartTime).TotalSeconds;
-                                CheckAndTriggerCustomKeys(currentScriptTime);
+                            while (isPlaying)
+                            {
+                                double elapsedSeconds = Stopwatch.GetElapsedTime(waitStartTick).TotalSeconds;
+                                double remaining = waitSeconds - elapsedSeconds;
+
+                                if (remaining <= 0)
+                                    break;
+
+                                // 節流：每 ~20ms 檢查一次自定義按鍵（避免 spin 區間瘋狂呼叫）
+                                if (Stopwatch.GetElapsedTime(lastCustomKeyCheckTick).TotalMilliseconds >= 20)
+                                {
+                                    lastCustomKeyCheckTick = Stopwatch.GetTimestamp();
+                                    double currentScriptTime = Stopwatch.GetElapsedTime(loopStartTick).TotalSeconds;
+                                    CheckAndTriggerCustomKeys(currentScriptTime);
+                                }
+
+                                if (remaining > 0.05) // > 50ms：Sleep 較長以節省 CPU
+                                {
+                                    Thread.Sleep(30);
+                                }
+                                else if (remaining > 0.002) // 2~50ms：短 Sleep
+                                {
+                                    Thread.Sleep(1);
+                                }
+                                else // < 2ms：短 Sleep 確保 hook 線程有 CPU 時間處理按鍵
+                                {
+                                    Thread.Sleep(1);
+                                }
+                            }
+                        }
+
+                        // 記錄 keydown 時間戳，用於計算持續時間
+                        if (evt.EventType == "down")
+                        {
+                            lock (lastKeyDownTimestamp)
+                            {
+                                lastKeyDownTimestamp[evt.KeyCode] = evt.Timestamp;
+                            }
+                        }
+                        else if (evt.EventType == "up")
+                        {
+                            lock (lastKeyDownTimestamp)
+                            {
+                                lastKeyDownTimestamp.Remove(evt.KeyCode);
                             }
                         }
 
                         SendKeyEvent(evt);
                         lastTimestamp = evt.Timestamp;
+
+                        // 第一個按鍵發送後記錄
+                        if (!firstKeySent)
+                        {
+                            firstKeySent = true;
+                            var firstEvt = evt;
+                            this.BeginInvoke(new Action(() =>
+                                AddLog($"✅ 第一個按鍵已發送: {GetKeyDisplayName(firstEvt.KeyCode)} ({firstEvt.EventType})")
+                            ));
+                        }
                     }
 
                     Thread.Sleep(200);
@@ -1238,7 +1401,16 @@ namespace MapleStoryMacro
                 isPlaying = false;
                 statistics.EndSession();
 
-                this.Invoke(new Action(() =>
+                // 清理 Blocker
+                if (keyboardBlocker != null)
+                {
+                    keyboardBlocker.IsBlocking = false;
+                    keyboardBlocker.Uninstall();
+                }
+
+                ReleasePressedKeys();
+
+                this.BeginInvoke(new Action(() =>
                 {
                     lblPlaybackStatus.Text = "播放: 已完成";
                     lblPlaybackStatus.ForeColor = Color.Green;
@@ -1249,12 +1421,22 @@ namespace MapleStoryMacro
             catch (Exception ex)
             {
                 statistics.EndSession();
-                this.Invoke(new Action(() =>
+
+                // 清理 Blocker
+                if (keyboardBlocker != null)
                 {
-                    AddLog($"❌ 播放錯誤: {ex.Message}");
-                }));
+                    keyboardBlocker.IsBlocking = false;
+                    keyboardBlocker.Uninstall();
+                }
+
                 ReleasePressedKeys();
                 isPlaying = false;
+
+                this.BeginInvoke(new Action(() =>
+                {
+                    AddLog($"❌ 播放錯誤: {ex.Message}");
+                    UpdateUI();
+                }));
             }
         }
 
@@ -1353,45 +1535,43 @@ namespace MapleStoryMacro
         {
             try
             {
+                bool isDown = evt.EventType == "down";
+
                 // Check if we have a valid target window for background sending
                 if (targetWindowHandle != IntPtr.Zero && IsWindow(targetWindowHandle))
                 {
                     // 對於 Alt 鍵，使用特殊的發送方式
                     if (IsAltKey(evt.KeyCode))
                     {
-                        SendAltKeyToWindow(targetWindowHandle, evt.KeyCode, evt.EventType == "down");
-                        AddLog($"背景(Alt): {evt.KeyCode} ({evt.EventType})");
+                        SendAltKeyToWindow(targetWindowHandle, evt.KeyCode, isDown);
                     }
                     // 對於方向鍵，根據設定的模式發送
                     else if (IsArrowKey(evt.KeyCode))
                     {
-                        SendArrowKeyWithMode(targetWindowHandle, evt.KeyCode, evt.EventType == "down");
-                        AddLog($"背景({currentArrowKeyMode}): {evt.KeyCode} ({evt.EventType})");
+                        SendArrowKeyWithMode(targetWindowHandle, evt.KeyCode, isDown);
                     }
                     // 英數鍵：使用 PostMessage（不攔截）
                     else if (IsAlphaNumericKey(evt.KeyCode))
                     {
-                        SendKeyToWindow(targetWindowHandle, evt.KeyCode, evt.EventType == "down");
-                        AddLog($"背景(PM): {evt.KeyCode} ({evt.EventType})");
+                        SendKeyToWindow(targetWindowHandle, evt.KeyCode, isDown);
                     }
                     // 對於其他延伸鍵，使用線程附加模式
                     else if (IsExtendedKey(evt.KeyCode))
                     {
-                        SendKeyWithThreadAttach(targetWindowHandle, evt.KeyCode, evt.EventType == "down");
-                        AddLog($"背景(附加): {evt.KeyCode} ({evt.EventType})");
+                        SendKeyWithThreadAttach(targetWindowHandle, evt.KeyCode, isDown);
                     }
                     else
                     {
                         // 一般按鍵：使用背景模式
-                        SendKeyToWindow(targetWindowHandle, evt.KeyCode, evt.EventType == "down");
-                        AddLog($"背景: {evt.KeyCode} ({evt.EventType})");
+                        SendKeyToWindow(targetWindowHandle, evt.KeyCode, isDown);
                     }
+                    Debug.WriteLine($"背景: {evt.KeyCode} ({evt.EventType})");
                 }
                 else
                 {
-                    // Foreground key sending using keybd_event
-                    SendKeyForeground(evt.KeyCode, evt.EventType == "down");
-                    AddLog($"前景: {evt.KeyCode} ({evt.EventType})");
+                    // Foreground key sending using SendInput
+                    SendKeyForeground(evt.KeyCode, isDown);
+                    Debug.WriteLine($"前景: {evt.KeyCode} ({evt.EventType})");
                 }
 
                 if (evt.EventType == "down")
@@ -1656,7 +1836,7 @@ namespace MapleStoryMacro
                 uint msg = isKeyDown ? WM_SYSKEYDOWN : WM_SYSKEYUP;
                 PostMessage(hWnd, msg, (IntPtr)vkCode, lParam);
 
-                AddLog($"Alt 按鍵: VK=0x{vkCode:X2}, SC=0x{scanCode:X2}, 旗標=0x{flags:X}");
+                Debug.WriteLine($"Alt 按鍵: VK=0x{vkCode:X2}, SC=0x{scanCode:X2}, 旗標=0x{flags:X}");
             }
             finally
             {
@@ -1740,9 +1920,9 @@ namespace MapleStoryMacro
         private bool IsExtendedKey(Keys key)
         {
             return key == Keys.Left || key == Keys.Right || key == Keys.Up || key == Keys.Down ||
-                  key == Keys.Insert || key == Keys.Delete || key == Keys.Home || key == Keys.End ||
-         key == Keys.PageUp || key == Keys.PageDown || key == Keys.NumLock || key == Keys.PrintScreen ||
-                 key == Keys.RMenu || key == Keys.RControlKey || key == Keys.RShiftKey;
+                   key == Keys.Insert || key == Keys.Delete || key == Keys.Home || key == Keys.End ||
+                   key == Keys.PageUp || key == Keys.PageDown || key == Keys.NumLock || key == Keys.PrintScreen ||
+                   key == Keys.RMenu || key == Keys.RControlKey || key == Keys.RShiftKey;
         }
 
         /// <summary>
@@ -1807,7 +1987,7 @@ namespace MapleStoryMacro
             {
                 statistics.EndSession();
             }
-            
+
             // 停用 KeyboardBlocker
             if (keyboardBlocker != null)
             {
@@ -1815,7 +1995,7 @@ namespace MapleStoryMacro
                 keyboardBlocker.Uninstall();
                 AddLog($"鍵盤阻擋器已停用");
             }
-            
+
             ReleasePressedKeys();
             isPlaying = false;
             lblPlaybackStatus.Text = "播放: 已停止";
@@ -1888,7 +2068,7 @@ namespace MapleStoryMacro
             {
                 Text = "⚙ 熱鍵與進階設定",
                 Width = 450,
-                Height = 350,
+                Height = 400,
                 StartPosition = FormStartPosition.CenterParent,
                 Owner = this,
                 FormBorderStyle = FormBorderStyle.FixedDialog,
@@ -1973,12 +2153,12 @@ namespace MapleStoryMacro
             {
                 (ArrowKeyMode.SendToChild, "S2C (背景)"),
                 (ArrowKeyMode.ThreadAttachWithBlocker, "TAB"),
-                (ArrowKeyMode.SendInputWithBlock, "SWB (推薦)")
+                (ArrowKeyMode.SendInputWithBlock, "SWB")
             };
 
      foreach (var mode in availableModes)
-          {
-            cmbArrowMode.Items.Add(mode.name);
+            {
+                cmbArrowMode.Items.Add(mode.name);
             }
 
             // 找到當前模式在列表中的索引
@@ -1988,7 +2168,7 @@ namespace MapleStoryMacro
             // 方向鍵模式說明
             Label lblArrowHint = new Label
             {
-                Text = "S2C=背景 | TAB=TA+Blocker | SWB=SendInput+Blocker",
+                Text = "S2C=背景(會洩漏) | TAB/SWB=嘗試攔截",
                 Left = 20,
                 Top = 180,
                 Width = 400,
@@ -2007,11 +2187,22 @@ namespace MapleStoryMacro
             };
 
             // 按鈕
+            Button btnDiag = new Button
+            {
+                Text = "🔍 輸入方式診斷",
+                Left = 20,
+                Top = 240,
+                Width = 150,
+                Height = 30,
+                BackColor = Color.FromArgb(120, 80, 40),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
             Button btnSave = new Button
             {
                 Text = "儲存",
-                Left = 130,
-                Top = 250,
+                Left = 180,
+                Top = 290,
                 Width = 80,
                 Height = 30,
                 BackColor = Color.FromArgb(0, 122, 204),
@@ -2021,8 +2212,8 @@ namespace MapleStoryMacro
             Button btnCancel = new Button
             {
                 Text = "取消",
-                Left = 220,
-                Top = 250,
+                Left = 270,
+                Top = 290,
                 Width = 80,
                 Height = 30,
                 BackColor = Color.FromArgb(80, 80, 85),
@@ -2045,11 +2236,13 @@ namespace MapleStoryMacro
 
             btnCancel.Click += (s, args) => settingsForm.Close();
 
+            btnDiag.Click += (s, args) => OpenInputDiagnostic();
+
             settingsForm.Controls.AddRange(new Control[]
             {
                 lblPlay, txtPlay, lblStop, txtStop, chkEnabled,
                 lblArrowMode, cmbArrowMode, lblArrowHint,
-                lblHint, btnSave, btnCancel
+                lblHint, btnDiag, btnSave, btnCancel
             });
 
             settingsForm.ShowDialog();
@@ -2573,6 +2766,559 @@ namespace MapleStoryMacro
             }
         }
 
+        /// <summary>
+        /// 取得目標進程的 exe 路徑（支援跨架構：64-bit 宏程式讀取 32-bit 遊戲進程）
+        /// </summary>
+        private string? GetProcessExePath(uint processId)
+        {
+            IntPtr hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, processId);
+            if (hProcess == IntPtr.Zero)
+                return null;
+
+            try
+            {
+                var sb = new StringBuilder(1024);
+                uint size = (uint)sb.Capacity;
+                if (QueryFullProcessImageName(hProcess, 0, sb, ref size))
+                {
+                    return sb.ToString();
+                }
+                return null;
+            }
+            finally
+            {
+                CloseHandle(hProcess);
+            }
+        }
+
+        /// <summary>
+        /// 列舉目標進程載入的模組名稱（DLL 列表）
+        /// </summary>
+        private List<string> GetProcessModules(uint processId)
+        {
+            var modules = new List<string>();
+            IntPtr hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, processId);
+            if (hProcess == IntPtr.Zero)
+                return modules;
+
+            try
+            {
+                IntPtr[] moduleHandles = new IntPtr[1024];
+                if (EnumProcessModulesEx(hProcess, moduleHandles, (uint)(IntPtr.Size * moduleHandles.Length), out uint needed, LIST_MODULES_ALL))
+                {
+                    int count = (int)(needed / IntPtr.Size);
+                    var sb = new StringBuilder(256);
+                    for (int i = 0; i < count; i++)
+                    {
+                        sb.Clear();
+                        if (GetModuleBaseName(hProcess, moduleHandles[i], sb, (uint)sb.Capacity) > 0)
+                        {
+                            modules.Add(sb.ToString().ToLowerInvariant());
+                        }
+                    }
+                }
+            }
+            catch { }
+            finally
+            {
+                CloseHandle(hProcess);
+            }
+
+            return modules;
+        }
+
+        /// <summary>
+        /// 掃描遊戲 exe 的 PE Import Table，尋找鍵盤輸入相關 API
+        /// 這是非侵入式的：只讀取磁碟上的檔案，不注入任何東西
+        /// </summary>
+        private Dictionary<string, bool> ScanExeForKeyboardAPIs(string exePath)
+        {
+            // 要搜尋的 API 名稱（按優先順序排列）
+            var apiNames = new[]
+            {
+                "GetAsyncKeyState",        // 非同步鍵盤狀態（硬體層）
+                "GetKeyState",             // 同步鍵盤狀態（訊息佇列）
+                "GetKeyboardState",        // 取得整個鍵盤狀態陣列
+                "DirectInput8Create",      // DirectInput 8
+                "DirectInputCreateEx",     // DirectInput 舊版
+                "DirectInputCreate",       // DirectInput 最舊版
+                "GetRawInputData",         // Raw Input API
+                "RegisterRawInputDevices", // Raw Input 註冊
+                "PeekMessageA",            // 訊息迴圈 (ANSI)
+                "PeekMessageW",            // 訊息迴圈 (Unicode)
+                "GetMessageA",             // 訊息迴圈 (ANSI)
+                "GetMessageW",             // 訊息迴圈 (Unicode)
+            };
+
+            var results = new Dictionary<string, bool>();
+            foreach (var api in apiNames)
+                results[api] = false;
+
+            try
+            {
+                // 讀取 exe 檔案的原始二進位資料
+                byte[] fileBytes = File.ReadAllBytes(exePath);
+
+                // 將整個檔案轉為 ASCII 字串用於搜尋
+                // PE import table 中的 API 名稱都是 ASCII
+                // 注意：這是一種簡易搜尋法，不解析 PE 結構，但對於偵測 import 是足夠的
+                string fileAsAscii = System.Text.Encoding.ASCII.GetString(fileBytes);
+
+                // 搜尋每個 API 名稱
+                foreach (var api in apiNames)
+                {
+                    // 簡易搜尋：直接在二進位中找 ASCII 字串
+                    int index = fileAsAscii.IndexOf(api, StringComparison.Ordinal);
+                    if (index >= 0)
+                    {
+                        results[api] = true;
+                    }
+                }
+
+                // 特殊處理：GetKeyState 可能是 GetAsyncKeyState 的子字串
+                // 需要確認是否有獨立的 GetKeyState（不是 GetAsyncKeyState 的一部分）
+                if (results["GetKeyState"] && results["GetAsyncKeyState"])
+                {
+                    // 計算 GetKeyState 出現次數（不含 GetAsyncKeyState）
+                    int startIdx = 0;
+                    int independentCount = 0;
+                    while (startIdx < fileAsAscii.Length)
+                    {
+                        int found = fileAsAscii.IndexOf("GetKeyState", startIdx, StringComparison.Ordinal);
+                        if (found < 0) break;
+
+                        // 檢查前面是否有 "Async"
+                        bool isPartOfAsync = found >= 5 &&
+                            fileAsAscii.Substring(found - 5, 5) == "Async";
+
+                        if (!isPartOfAsync)
+                        {
+                            independentCount++;
+                        }
+
+                        startIdx = found + 11; // "GetKeyState".Length
+                    }
+
+                    // 如果沒有獨立的 GetKeyState，只有作為 GetAsyncKeyState 的子字串
+                    results["GetKeyState"] = independentCount > 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                AddLog($"PE 掃描錯誤: {ex.Message}");
+            }
+
+            return results;
+        }
+
+        /// <summary>
+        /// 開啟輸入方式診斷視窗
+        /// </summary>
+        private void OpenInputDiagnostic()
+        {
+            if (targetWindowHandle == IntPtr.Zero || !IsWindow(targetWindowHandle))
+            {
+                MessageBox.Show("請先鎖定遊戲視窗！", "診斷", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            AddLog("🔍 開始輸入方式診斷...");
+
+            // 取得目標進程資訊
+            GetWindowThreadProcessId(targetWindowHandle, out uint processId);
+            if (processId == 0)
+            {
+                AddLog("❌ 無法取得目標進程 ID");
+                return;
+            }
+
+            // --- 1. 掃描 exe 的 import table ---
+            string? exePath = GetProcessExePath(processId);
+            Dictionary<string, bool>? apiResults = null;
+            if (exePath != null && File.Exists(exePath))
+            {
+                AddLog($"掃描 exe: {Path.GetFileName(exePath)}");
+                apiResults = ScanExeForKeyboardAPIs(exePath);
+            }
+            else
+            {
+                AddLog("⚠️ 無法取得 exe 路徑（可能權限不足）");
+            }
+
+            // --- 2. 檢查載入的模組 ---
+            var loadedModules = GetProcessModules(processId);
+            bool hasDInput8 = loadedModules.Contains("dinput8.dll");
+            bool hasDInput = loadedModules.Contains("dinput.dll");
+            bool hasXInput = loadedModules.Any(m => m.StartsWith("xinput"));
+            bool hasRawInput = false; // Raw Input 是 user32.dll 的一部分，無法從模組判斷
+
+            // --- 3. 建立診斷結果視窗 ---
+            Form diagForm = new Form
+            {
+                Text = "🔍 輸入方式診斷結果",
+                Width = 650,
+                Height = 580,
+                StartPosition = FormStartPosition.CenterParent,
+                Owner = this,
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                MaximizeBox = false,
+                MinimizeBox = false,
+                BackColor = Color.FromArgb(30, 30, 35)
+            };
+
+            var resultBox = new RichTextBox
+            {
+                Left = 10,
+                Top = 10,
+                Width = 610,
+                Height = 430,
+                ReadOnly = true,
+                BackColor = Color.FromArgb(20, 20, 25),
+                ForeColor = Color.LightGray,
+                Font = new Font("Consolas", 10F),
+                BorderStyle = BorderStyle.None,
+                ScrollBars = RichTextBoxScrollBars.Vertical
+            };
+
+            // 組裝結果文字
+            var sb = new StringBuilder();
+            sb.AppendLine("═══════════════════════════════════════════");
+            sb.AppendLine("  🔍 遊戲鍵盤輸入方式診斷報告");
+            sb.AppendLine("═══════════════════════════════════════════");
+            sb.AppendLine();
+
+            // 基本資訊
+            sb.AppendLine($"  進程 ID:    {processId}");
+            sb.AppendLine($"  EXE 路徑:   {exePath ?? "(未知)"}");
+            sb.AppendLine($"  架構:       {(IsProcess32Bit(processId) ? "32-bit" : "64-bit")}");
+            sb.AppendLine($"  載入模組數: {loadedModules.Count}");
+            sb.AppendLine();
+
+            // API 掃描結果
+            sb.AppendLine("───────────────────────────────────────────");
+            sb.AppendLine("  ◆ PE Import Table 掃描（exe 檔案內的 API 引用）");
+            sb.AppendLine("───────────────────────────────────────────");
+
+            if (apiResults != null)
+            {
+                void AppendApiResult(string api, string description, string impact)
+                {
+                    string icon = apiResults.GetValueOrDefault(api) ? "✅" : "❌";
+                    sb.AppendLine($"  {icon} {api,-30} {description}");
+                    if (apiResults.GetValueOrDefault(api))
+                    {
+                        sb.AppendLine($"     → {impact}");
+                    }
+                }
+
+                AppendApiResult("GetAsyncKeyState", "硬體層鍵盤狀態",
+                    "輪詢硬體狀態，需要 keybd_event/SendInput 才能影響");
+                AppendApiResult("GetKeyState", "訊息佇列鍵盤狀態",
+                    "同步狀態，理論上 PostMessage 應有效（但實際可能需 TA）");
+                AppendApiResult("GetKeyboardState", "完整鍵盤狀態陣列",
+                    "類似 GetKeyState，取得所有按鍵狀態");
+
+                sb.AppendLine();
+                AppendApiResult("DirectInput8Create", "DirectInput 8",
+                    "DirectInput 輪詢，需要 DI 層級介入");
+                AppendApiResult("DirectInputCreateEx", "DirectInput (舊版)",
+                    "舊版 DirectInput");
+                AppendApiResult("DirectInputCreate", "DirectInput (最舊)",
+                    "最舊版 DirectInput");
+
+                sb.AppendLine();
+                AppendApiResult("GetRawInputData", "Raw Input 資料",
+                    "Raw Input 模式，只能透過 SendInput 影響");
+                AppendApiResult("RegisterRawInputDevices", "Raw Input 註冊",
+                    "使用 Raw Input 子系統");
+
+                sb.AppendLine();
+                AppendApiResult("PeekMessageA", "訊息迴圈 (A)",
+                    "可能透過 WM_KEYDOWN 接收按鍵（PostMessage 可能有效）");
+                AppendApiResult("PeekMessageW", "訊息迴圈 (W)",
+                    "可能透過 WM_KEYDOWN 接收按鍵（PostMessage 可能有效）");
+                AppendApiResult("GetMessageA", "訊息等待 (A)",
+                    "同 PeekMessage");
+                AppendApiResult("GetMessageW", "訊息等待 (W)",
+                    "同 PeekMessage");
+            }
+            else
+            {
+                sb.AppendLine("  ⚠️ 無法掃描（exe 路徑不可用或權限不足）");
+            }
+
+            // 模組檢查結果
+            sb.AppendLine();
+            sb.AppendLine("───────────────────────────────────────────");
+            sb.AppendLine("  ◆ 已載入模組檢查");
+            sb.AppendLine("───────────────────────────────────────────");
+            sb.AppendLine($"  {(hasDInput8 ? "✅" : "❌")} dinput8.dll    {(hasDInput8 ? "→ 遊戲使用 DirectInput 8!" : "(未載入)")}");
+            sb.AppendLine($"  {(hasDInput ? "✅" : "❌")} dinput.dll     {(hasDInput ? "→ 遊戲使用舊版 DirectInput!" : "(未載入)")}");
+            sb.AppendLine($"  {(hasXInput ? "✅" : "❌")} xinput*.dll    {(hasXInput ? "→ 遊戲使用 XInput (手柄)" : "(未載入)")}");
+
+            // 列出所有可能相關的模組
+            var relevantModules = loadedModules.Where(m =>
+                m.Contains("input") || m.Contains("hook") || m.Contains("key") ||
+                m.Contains("hid") || m.Contains("dinput")).ToList();
+            if (relevantModules.Any())
+            {
+                sb.AppendLine();
+                sb.AppendLine("  相關模組:");
+                foreach (var mod in relevantModules)
+                {
+                    sb.AppendLine($"    • {mod}");
+                }
+            }
+
+            // 綜合分析
+            sb.AppendLine();
+            sb.AppendLine("───────────────────────────────────────────");
+            sb.AppendLine("  ◆ 綜合分析與建議");
+            sb.AppendLine("───────────────────────────────────────────");
+
+            if (apiResults != null)
+            {
+                bool usesAsyncKeyState = apiResults.GetValueOrDefault("GetAsyncKeyState");
+                bool usesKeyState = apiResults.GetValueOrDefault("GetKeyState");
+                bool usesDirectInput = hasDInput8 || hasDInput ||
+                    apiResults.GetValueOrDefault("DirectInput8Create") ||
+                    apiResults.GetValueOrDefault("DirectInputCreateEx") ||
+                    apiResults.GetValueOrDefault("DirectInputCreate");
+                bool usesRawInput = apiResults.GetValueOrDefault("GetRawInputData") ||
+                    apiResults.GetValueOrDefault("RegisterRawInputDevices");
+                bool usesMessageLoop = apiResults.GetValueOrDefault("PeekMessageA") ||
+                    apiResults.GetValueOrDefault("PeekMessageW") ||
+                    apiResults.GetValueOrDefault("GetMessageA") ||
+                    apiResults.GetValueOrDefault("GetMessageW");
+
+                if (usesDirectInput)
+                {
+                    sb.AppendLine("  🎮 遊戲使用 DirectInput");
+                    sb.AppendLine("     方向鍵很可能透過 DI 輪詢硬體狀態");
+                    sb.AppendLine("     → PostMessage 無法影響 DI");
+                    sb.AppendLine("     → keybd_event/SendInput 可以影響 DI");
+                    sb.AppendLine("     → 背景發送方向鍵時必然會影響前景");
+                    sb.AppendLine("     ★ 建議使用 S2C 模式（接受洩漏）");
+                }
+                else if (usesAsyncKeyState)
+                {
+                    sb.AppendLine("  ⚡ 遊戲使用 GetAsyncKeyState 輪詢");
+                    sb.AppendLine("     方向鍵透過硬體層狀態輪詢");
+                    sb.AppendLine("     → PostMessage 完全無效（這解釋了你的觀察！）");
+                    sb.AppendLine("     → 只有 keybd_event/SendInput 能影響");
+                    sb.AppendLine("     → 背景發送必然影響全域鍵盤狀態");
+                    sb.AppendLine("     ★ 建議使用 S2C 模式（接受洩漏）");
+                }
+                else if (usesKeyState)
+                {
+                    sb.AppendLine("  🔑 遊戲使用 GetKeyState 輪詢");
+                    sb.AppendLine("     方向鍵透過同步鍵盤狀態");
+                    sb.AppendLine("     → PostMessage 理論上應有效");
+                    sb.AppendLine("     → 但實測無效可能是遊戲的 message pump 機制問題");
+                    sb.AppendLine("     → AttachThreadInput + keybd_event 最可靠");
+                    sb.AppendLine("     ★ 建議使用 S2C 模式");
+                }
+                else if (usesRawInput)
+                {
+                    sb.AppendLine("  📡 遊戲使用 Raw Input");
+                    sb.AppendLine("     Raw Input 直接接收硬體事件");
+                    sb.AppendLine("     → PostMessage 無效");
+                    sb.AppendLine("     → SendInput 可能有效");
+                    sb.AppendLine("     ★ 建議使用 SWB 模式測試");
+                }
+                else if (usesMessageLoop)
+                {
+                    sb.AppendLine("  📨 遊戲使用訊息迴圈");
+                    sb.AppendLine("     可能透過 WM_KEYDOWN 接收按鍵");
+                    sb.AppendLine("     → PostMessage 可能有效（但你已確認無效）");
+                    sb.AppendLine("     → 可能同時搭配其他 API");
+                    sb.AppendLine("     ★ 需要進一步實驗測試");
+                }
+                else
+                {
+                    sb.AppendLine("  ❓ 未偵測到已知的鍵盤輸入 API");
+                    sb.AppendLine("     可能使用動態載入（GetProcAddress）");
+                    sb.AppendLine("     或使用非標準的輸入方式");
+                    sb.AppendLine("     ★ 建議用實驗測試確認");
+                }
+
+                // 通用建議
+                sb.AppendLine();
+                if (!usesDirectInput && !usesAsyncKeyState)
+                {
+                    sb.AppendLine("  💡 如果上述分析不符，遊戲可能使用 GetProcAddress");
+                    sb.AppendLine("     動態載入 API（不會出現在 import table 中）");
+                    sb.AppendLine("     → 建議使用下方「實驗測試」按鈕直接測試");
+                }
+            }
+
+            resultBox.Text = sb.ToString();
+
+            // 按鈕
+            Button btnRunTest = new Button
+            {
+                Text = "🧪 實驗測試（發送方向鍵）",
+                Left = 10,
+                Top = 450,
+                Width = 200,
+                Height = 35,
+                BackColor = Color.FromArgb(0, 122, 204),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
+
+            Button btnCopy = new Button
+            {
+                Text = "📋 複製報告",
+                Left = 220,
+                Top = 450,
+                Width = 120,
+                Height = 35,
+                BackColor = Color.FromArgb(80, 80, 85),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
+
+            Button btnModules = new Button
+            {
+                Text = "📦 完整模組列表",
+                Left = 350,
+                Top = 450,
+                Width = 130,
+                Height = 35,
+                BackColor = Color.FromArgb(80, 80, 85),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
+
+            Button btnClose = new Button
+            {
+                Text = "關閉",
+                Left = 530,
+                Top = 450,
+                Width = 80,
+                Height = 35,
+                BackColor = Color.FromArgb(80, 80, 85),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
+
+            Label lblTestHint = new Label
+            {
+                Text = "💡 實驗測試會依序使用不同方法發送「→ 右方向鍵」各 500ms，請觀察遊戲角色是否移動",
+                Left = 10,
+                Top = 495,
+                Width = 610,
+                Height = 30,
+                ForeColor = Color.Yellow,
+                Font = new Font("Microsoft JhengHei UI", 8.5F)
+            };
+
+            btnRunTest.Click += (s, args) =>
+            {
+                btnRunTest.Enabled = false;
+                btnRunTest.Text = "測試中...";
+                Thread testThread = new Thread(() => RunArrowKeyExperiment())
+                {
+                    IsBackground = true
+                };
+                testThread.Start();
+
+                // 3 秒後恢復按鈕
+                var restoreTimer = new System.Windows.Forms.Timer { Interval = 5000 };
+                restoreTimer.Tick += (ts, ta) =>
+                {
+                    btnRunTest.Enabled = true;
+                    btnRunTest.Text = "🧪 實驗測試（發送方向鍵）";
+                    restoreTimer.Stop();
+                    restoreTimer.Dispose();
+                };
+                restoreTimer.Start();
+            };
+
+            btnCopy.Click += (s, args) =>
+            {
+                Clipboard.SetText(resultBox.Text);
+                AddLog("✅ 診斷報告已複製到剪貼簿");
+            };
+
+            btnModules.Click += (s, args) =>
+            {
+                string moduleList = string.Join("\n", loadedModules.OrderBy(m => m).Select(m => $"  • {m}"));
+                MessageBox.Show($"進程 {processId} 的已載入模組 ({loadedModules.Count})：\n\n{moduleList}",
+                    "模組列表", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            };
+
+            btnClose.Click += (s, args) => diagForm.Close();
+
+            diagForm.Controls.AddRange(new Control[] { resultBox, btnRunTest, btnCopy, btnModules, btnClose, lblTestHint });
+            diagForm.ShowDialog();
+        }
+
+        /// <summary>
+        /// 實驗測試：依序使用不同方法發送右方向鍵，讓使用者觀察哪種有效
+        /// </summary>
+        private void RunArrowKeyExperiment()
+        {
+            if (targetWindowHandle == IntPtr.Zero || !IsWindow(targetWindowHandle))
+            {
+                this.BeginInvoke(new Action(() => AddLog("❌ 目標視窗無效")));
+                return;
+            }
+
+            var tests = new (string name, Action<bool> sendMethod)[]
+            {
+                ("純 PostMessage（WM_KEYDOWN/UP）", (isDown) =>
+                {
+                    SendKeyToWindow(targetWindowHandle, Keys.Right, isDown);
+                }),
+                ("PostMessage 到子視窗", (isDown) =>
+                {
+                    SendArrowKeyToChildWindow(targetWindowHandle, Keys.Right, isDown);
+                }),
+                ("AttachThreadInput + keybd_event（S2C）", (isDown) =>
+                {
+                    SendKeyWithThreadAttach(targetWindowHandle, Keys.Right, isDown);
+                }),
+                ("SendInput（前景模式）", (isDown) =>
+                {
+                    SendKeyForeground(Keys.Right, isDown);
+                }),
+            };
+
+            for (int i = 0; i < tests.Length; i++)
+            {
+                if (isPlaying) break; // 如果正在播放腳本則中斷
+
+                var test = tests[i];
+                int testNum = i + 1;
+
+                this.BeginInvoke(new Action(() =>
+                    AddLog($"🧪 測試 {testNum}/{tests.Length}: {test.name}")
+                ));
+
+                // 按下
+                test.sendMethod(true);
+                Thread.Sleep(500); // 持續 500ms
+                // 放開
+                test.sendMethod(false);
+
+                this.BeginInvoke(new Action(() =>
+                    AddLog($"   → 測試 {testNum} 結束，角色有移動嗎？")
+                ));
+
+                // 測試間隔 1 秒
+                if (i < tests.Length - 1)
+                    Thread.Sleep(1000);
+            }
+
+            this.BeginInvoke(new Action(() =>
+            {
+                AddLog("🧪 實驗測試完成！請檢查哪個測試讓角色移動了");
+                AddLog("   測試1=PostMessage | 測試2=PostMsg子視窗 | 測試3=TA+keybd_event | 測試4=SendInput");
+            }));
+        }
+
         private void UpdateUI()
         {
             btnStartRecording.Enabled = !isRecording && !isPlaying;
@@ -2583,7 +3329,7 @@ namespace MapleStoryMacro
 
         private double GetCurrentTime()
         {
-            return Environment.TickCount / 1000.0;
+            return highResTimer.Elapsed.TotalSeconds;
         }
 
         private void Form1_Load(object? sender, EventArgs e)
@@ -2734,6 +3480,10 @@ namespace MapleStoryMacro
             stopHotkey = settings.StopHotkey;
             hotkeyEnabled = settings.HotkeyEnabled;
             txtWindowTitle.Text = settings.WindowTitle;
+
+            // 自動降級：無效的模式值改為 SendToChild(0)
+            if (settings.ArrowKeyMode > 2)
+                settings.ArrowKeyMode = 0;
             currentArrowKeyMode = (ArrowKeyMode)settings.ArrowKeyMode;
 
             // 嘗試自動載入上次的腳本

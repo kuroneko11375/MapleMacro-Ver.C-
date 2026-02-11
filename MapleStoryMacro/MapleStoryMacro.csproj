@@ -7,15 +7,11 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <PlatformTarget>x64</PlatformTarget>
-    <Platforms>AnyCPU;x64;x64</Platforms>
+    <Platforms>AnyCPU;x64</Platforms>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="ReaLTaiizor" Version="3.8.1.5" />
   </ItemGroup>
-
-  <!-- �x�� vJoy C# Wrapper -->
-
-  <!-- �ƻs vJoy DLL ���X�ؿ� -->
 
 </Project>

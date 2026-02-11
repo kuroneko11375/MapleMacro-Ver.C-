@@ -1,48 +1,48 @@
-using System;
+ï»¿using System;
 using System.Windows.Forms;
 
 namespace MapleStoryMacro
 {
     /// <summary>
-    /// ¥þ°ì³]©wÃþ§O - ¥Î©óÀx¦s¸ó¸}¥»ªº¥þ°ì³]©w (.json)
-    /// ¤£¥]§t¸}¥»¯S©w¸ê®Æ¡]¨Æ¥ó¡B¦Û©w¸q«öÁä¡B´`Àô¦¸¼Æ¡^
+    /// ï¿½ï¿½ï¿½ï¿½]ï¿½wï¿½ï¿½ï¿½O - ï¿½Î©ï¿½ï¿½xï¿½sï¿½ï¿½}ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½]ï¿½w (.json)
+    /// ï¿½ï¿½ï¿½]ï¿½tï¿½}ï¿½ï¿½ï¿½Sï¿½wï¿½ï¿½Æ¡]ï¿½Æ¥ï¿½Bï¿½Û©wï¿½qï¿½ï¿½ï¿½ï¿½Bï¿½`ï¿½ï¿½ï¿½ï¿½Æ¡^
     /// </summary>
     public class AppSettings
     {
         /// <summary>
-        /// ¼½©ñ¼öÁä
+        /// ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         /// </summary>
         public Keys PlayHotkey { get; set; } = Keys.F9;
 
         /// <summary>
-        /// °±¤î¼öÁä
+        /// ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
         /// </summary>
         public Keys StopHotkey { get; set; } = Keys.F10;
 
         /// <summary>
-        /// ¼öÁä¬O§_±Ò¥Î
+        /// ï¿½ï¿½ï¿½ï¿½Oï¿½_ï¿½Ò¥ï¿½
         /// </summary>
         public bool HotkeyEnabled { get; set; } = true;
 
         /// <summary>
-        /// ¥Ø¼Ðµøµ¡¼ÐÃD
+        /// ï¿½Ø¼Ðµï¿½ï¿½ï¿½ï¿½ï¿½ï¿½D
         /// </summary>
         public string WindowTitle { get; set; } = "MapleStory";
 
         /// <summary>
-        /// ¤è¦VÁäµo°e¼Ò¦¡
-        /// 0=SendToChild, 1=ThreadAttachWithBlocker, 2=SendInputWithBlock, 3=RustFlashFocus
+        /// ï¿½ï¿½Vï¿½ï¿½oï¿½eï¿½Ò¦ï¿½
+        /// 0=SendToChild, 1=ThreadAttachWithBlocker, 2=SendInputWithBlock
         /// </summary>
-        public int ArrowKeyMode { get; set; } = 3;
+        public int ArrowKeyMode { get; set; } = 0;
 
         /// <summary>
-        /// ³Ì«á¸ü¤Jªº¸}¥»¸ô®|¡]¤è«K¤U¦¸¦Û°Ê¸ü¤J¡^
+        /// ï¿½Ì«ï¿½ï¿½ï¿½Jï¿½ï¿½ï¿½}ï¿½ï¿½ï¿½ï¿½|ï¿½]ï¿½ï¿½Kï¿½Uï¿½ï¿½ï¿½Û°Ê¸ï¿½ï¿½Jï¿½^
         /// </summary>
         public string? LastScriptPath { get; set; }
     }
 
     /// <summary>
-    /// ¦Û©w¸q«öÁä¼Ñ¦ì¸ê®Æ (¥i§Ç¦C¤Æ)
+    /// ï¿½Û©wï¿½qï¿½ï¿½ï¿½ï¿½Ñ¦ï¿½ï¿½ï¿½ (ï¿½iï¿½Ç¦Cï¿½ï¿½)
     /// </summary>
     public class CustomKeySlotData
     {

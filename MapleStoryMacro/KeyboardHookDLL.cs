@@ -70,6 +70,12 @@ namespace MapleStoryMacro
         private IntPtr _hookHandle = IntPtr.Zero;
         private readonly LowLevelKeyboardProc _hookProc;
         private readonly KeyboardHookMode _mode;
+        private static IntPtr _cachedModuleHandle = IntPtr.Zero; // 快取模組控制代碼，避免重複取得
+
+        /// <summary>
+        /// 鉤子是否已安裝
+        /// </summary>
+        public bool IsInstalled => _hookHandle != IntPtr.Zero;
 
         /// <summary>
         /// 鍵盤事件回調 - 參數為 (Keys keyCode, bool isKeyDown)
@@ -87,6 +93,16 @@ namespace MapleStoryMacro
             // 保存委派參考，避免被 GC 回收
             _mode = mode;
             _hookProc = HookCallback;
+
+            // 預先快取模組控制代碼（避免 Install 時阻塞 UI）
+            if (_cachedModuleHandle == IntPtr.Zero)
+            {
+                using (Process curProcess = Process.GetCurrentProcess())
+                using (ProcessModule curModule = curProcess.MainModule!)
+                {
+                    _cachedModuleHandle = GetModuleHandle(curModule.ModuleName);
+                }
+            }
         }
 
         /// <summary>
@@ -101,18 +117,14 @@ namespace MapleStoryMacro
                 return true;
             }
 
-            using (Process curProcess = Process.GetCurrentProcess())
-            using (ProcessModule curModule = curProcess.MainModule!)
-            {
-                int hookId = _mode == KeyboardHookMode.GetMessage ? WH_GETMESSAGE : WH_KEYBOARD_LL;
-                uint threadId = _mode == KeyboardHookMode.GetMessage ? GetCurrentThreadId() : 0;
+            int hookId = _mode == KeyboardHookMode.GetMessage ? WH_GETMESSAGE : WH_KEYBOARD_LL;
+            uint threadId = _mode == KeyboardHookMode.GetMessage ? GetCurrentThreadId() : 0;
 
-                _hookHandle = SetWindowsHookEx(
-                    hookId,
-                    _hookProc,
-                    GetModuleHandle(curModule.ModuleName),
-                    threadId);
-            }
+            _hookHandle = SetWindowsHookEx(
+                hookId,
+                _hookProc,
+                _cachedModuleHandle,
+                threadId);
 
             if (_hookHandle == IntPtr.Zero)
             {
