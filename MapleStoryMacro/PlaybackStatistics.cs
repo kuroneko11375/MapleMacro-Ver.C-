@@ -97,6 +97,41 @@ namespace MapleStoryMacro
         }
 
         /// <summary>
+        /// 取得即時統計資訊（包含當前會話的即時資料）
+        /// </summary>
+        public string GetLiveFormattedStats()
+        {
+            double liveTotalSeconds = TotalPlayTimeSeconds;
+            string sessionElapsed = "--:--:--";
+            bool isActive = CurrentSessionStart.HasValue;
+
+            if (isActive)
+            {
+                double currentSessionSeconds = (DateTime.Now - CurrentSessionStart.Value).TotalSeconds;
+                liveTotalSeconds += currentSessionSeconds;
+                TimeSpan sessionTime = TimeSpan.FromSeconds(currentSessionSeconds);
+                sessionElapsed = $"{(int)sessionTime.TotalHours:D2}:{sessionTime.Minutes:D2}:{sessionTime.Seconds:D2}";
+            }
+
+            string lastPlay = LastPlayTime.HasValue
+                ? LastPlayTime.Value.ToString("yyyy-MM-dd HH:mm:ss")
+                : "從未播放";
+
+            TimeSpan totalTime = TimeSpan.FromSeconds(liveTotalSeconds);
+            string totalTimeStr = $"{(int)totalTime.TotalHours:D2}:{totalTime.Minutes:D2}:{totalTime.Seconds:D2}";
+
+            string status = isActive ? "?? 播放中" : "?? 已停止";
+
+            return $"狀態: {status}\n" +
+                   $"當前會話時長: {sessionElapsed}\n" +
+                   $"當前循環: {CurrentLoopCount}\n" +
+                   $"─────────────────\n" +
+                   $"累計播放次數: {TotalPlayCount + (isActive ? 1 : 0)}\n" +
+                   $"累計播放時長: {totalTimeStr}\n" +
+                   $"最後播放: {lastPlay}";
+        }
+
+        /// <summary>
         /// 重置所有統計
         /// </summary>
         public void Reset()

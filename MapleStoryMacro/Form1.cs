@@ -36,7 +36,7 @@ namespace MapleStoryMacro
         private PlaybackStatistics statistics = new PlaybackStatistics();
 
         // 定時執行
-        private DateTime? scheduledStartTime = null;
+        private List<ScheduleTask> scheduleTasks = new List<ScheduleTask>();
         private System.Windows.Forms.Timer schedulerTimer;
 
         // Log System
@@ -88,20 +88,6 @@ namespace MapleStoryMacro
         private static extern bool CloseHandle(IntPtr hObject);
 
         private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
-        private const uint PROCESS_QUERY_INFORMATION = 0x0400;
-        private const uint PROCESS_VM_READ = 0x0010;
-
-        // 進程路徑與模組列舉 API（用於診斷）
-        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-        private static extern bool QueryFullProcessImageName(IntPtr hProcess, uint dwFlags, StringBuilder lpExeName, ref uint lpdwSize);
-
-        [DllImport("psapi.dll", SetLastError = true)]
-        private static extern bool EnumProcessModulesEx(IntPtr hProcess, IntPtr[] lphModule, uint cb, out uint lpcbNeeded, uint dwFilterFlag);
-
-        [DllImport("psapi.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-        private static extern uint GetModuleBaseName(IntPtr hProcess, IntPtr hModule, StringBuilder lpBaseName, uint nSize);
-
-        private const uint LIST_MODULES_ALL = 0x03;
 
         [DllImport("user32.dll")]
         private static extern IntPtr SetFocus(IntPtr hWnd);
@@ -379,16 +365,55 @@ namespace MapleStoryMacro
         /// </summary>
         private void SchedulerTimer_Tick(object? sender, EventArgs e)
         {
-            if (scheduledStartTime.HasValue && DateTime.Now >= scheduledStartTime.Value)
+            // 檢查排程任務
+            foreach (var task in scheduleTasks.ToList())
             {
-                scheduledStartTime = null;
-                schedulerTimer.Stop();
-                AddLog("定時執行觸發！");
+                if (!task.Enabled) continue;
 
-                if (!isPlaying && recordedEvents.Count > 0)
+                // 檢查結束時間（自動停止）
+                if (task.HasStarted && task.EndTime.HasValue && DateTime.Now >= task.EndTime.Value)
                 {
-                    BtnStartPlayback_Click(this, EventArgs.Empty);
+                    task.Enabled = false;
+                    if (isPlaying)
+                    {
+                        AddLog($"排程結束：已到達結束時間 {task.EndTime.Value:HH:mm:ss}");
+                        BtnStopPlayback_Click(this, EventArgs.Empty);
+                    }
+                    continue;
                 }
+
+                // 檢查開始時間
+                if (!task.HasStarted && DateTime.Now >= task.StartTime)
+                {
+                    task.HasStarted = true;
+
+                    // 載入指定腳本
+                    if (!string.IsNullOrEmpty(task.ScriptPath) && File.Exists(task.ScriptPath))
+                    {
+                        LoadScriptFromFile(task.ScriptPath);
+                        numPlayTimes.Value = Math.Max(1, Math.Min(9999, task.LoopCount));
+                        AddLog($"排程觸發：載入腳本 {Path.GetFileName(task.ScriptPath)}");
+                    }
+
+                    if (!isPlaying && recordedEvents.Count > 0)
+                    {
+                        AddLog($"排程觸發：開始播放");
+                        BtnStartPlayback_Click(this, EventArgs.Empty);
+                    }
+
+                    // 如果沒有結束時間，標記為完成
+                    if (!task.EndTime.HasValue)
+                    {
+                        task.Enabled = false;
+                    }
+                }
+            }
+
+            // 移除已完成的任務
+            scheduleTasks.RemoveAll(t => !t.Enabled);
+            if (scheduleTasks.Count == 0)
+            {
+                schedulerTimer.Stop();
             }
         }
 
@@ -460,7 +485,24 @@ namespace MapleStoryMacro
             string recStatus = isRecording ? "🔴" : "⚪";
             string playStatus = isPlaying ? "▶️" : "⏹️";
 
-            lblStatus.Text = $"{recStatus} 錄製 | {playStatus} 播放 | 模式: {bgMode} | 事件: {recordedEvents.Count}";
+            // 腳本預估時長
+            string durationInfo = "";
+            if (recordedEvents.Count > 0)
+            {
+                double maxTs = recordedEvents.Max(ev => ev.Timestamp);
+                if (maxTs >= 60)
+                    durationInfo = $" | 時長: {maxTs / 60:F1}分";
+                else
+                    durationInfo = $" | 時長: {maxTs:F1}秒";
+            }
+
+            // 排程狀態
+            string schedInfo = "";
+            int activeSchedules = scheduleTasks.Count(t => t.Enabled);
+            if (activeSchedules > 0)
+                schedInfo = $" | 排程: {activeSchedules}";
+
+            lblStatus.Text = $"{recStatus} 錄製 | {playStatus} 播放 | 模式: {bgMode} | 事件: {recordedEvents.Count}{durationInfo}{schedInfo}";
 
             // 即時顯示 Hook 運作中
             if (isPlaying && keyboardBlocker != null)
@@ -953,7 +995,19 @@ namespace MapleStoryMacro
 
                 // 記住最後使用的腳本路徑
                 currentScriptPath = filePath;
-                lblRecordingStatus.Text = $"已載入 | 事件數: {recordedEvents.Count}";
+
+                // 計算腳本時長
+                string durationStr = "";
+                if (recordedEvents.Count > 0)
+                {
+                    double maxTs = recordedEvents.Max(ev => ev.Timestamp);
+                    if (maxTs >= 60)
+                        durationStr = $", 時長≈{maxTs / 60:F1}分";
+                    else
+                        durationStr = $", 時長≈{maxTs:F1}秒";
+                }
+
+                lblRecordingStatus.Text = $"已載入 | 事件數: {recordedEvents.Count}{durationStr}";
 
                 // 更新 UI 狀態，啟用開始播放按鍵
                 UpdateUI();
@@ -1055,12 +1109,15 @@ namespace MapleStoryMacro
             // 提示標籤
             Label hintLabel = new Label
             {
-                Text = "★ 已整合連續重複按鍵，顯示持續時間",
+                Text = "★ 選中列後按下按鍵可更改按鍵 | 支援延伸鍵 (End, PageUp 等)",
                 Top = 10,
                 Left = 10,
-                Width = 400,
+                Width = 600,
                 ForeColor = Color.Blue
             };
+
+            // 標記是否有未儲存的變更
+            bool hasUnsavedChanges = false;
 
             DataGridView dgv = new DataGridView
             {
@@ -1071,10 +1128,11 @@ namespace MapleStoryMacro
                 AllowUserToAddRows = false,
                 AllowUserToDeleteRows = true,
                 AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
-                SelectionMode = DataGridViewSelectionMode.FullRowSelect
+                SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+                ReadOnly = true
             };
 
-            dgv.Columns.Add("KeyCode", "按鍵");
+            dgv.Columns.Add("KeyCode", "按鍵 (選中後按鍵更改)");
             dgv.Columns.Add("Duration", "持續時間");
             dgv.Columns.Add("StartTime", "開始時間 (秒)");
             dgv.Columns.Add("EndTime", "結束時間 (秒)");
@@ -1085,8 +1143,49 @@ namespace MapleStoryMacro
                 string duration = evt.Duration >= 1.0
                     ? $"{evt.Duration:F2} 秒"
                     : $"{(evt.Duration * 1000):F0} ms";
-                dgv.Rows.Add(keyName, duration, evt.StartTime.ToString("F3"), evt.EndTime.ToString("F3"));
+                int rowIdx = dgv.Rows.Add(keyName, duration, evt.StartTime.ToString("F3"), evt.EndTime.ToString("F3"));
+                // 儲存原始 KeyCode 到 Row Tag
+                dgv.Rows[rowIdx].Tag = evt.KeyCode;
             }
+
+            // 攔截延伸鍵（End, PageUp, PageDown, 方向鍵等），讓它們不被 DGV 導航消耗
+            dgv.PreviewKeyDown += (s, args) =>
+            {
+                args.IsInputKey = true;
+            };
+
+            // 按鍵感應：選中列後按下按鍵即可更改
+            dgv.KeyDown += (s, args) =>
+            {
+                if (dgv.SelectedRows.Count == 0) return;
+
+                // 忽略修飾鍵和 Delete（Delete 保留給刪除功能）
+                if (args.KeyCode == Keys.Delete || args.KeyCode == Keys.ControlKey ||
+                    args.KeyCode == Keys.ShiftKey || args.KeyCode == Keys.Menu)
+                    return;
+
+                args.Handled = true;
+                args.SuppressKeyPress = true;
+
+                Keys newKey = args.KeyCode;
+                string newKeyName = GetKeyDisplayName(newKey);
+
+                foreach (DataGridViewRow row in dgv.SelectedRows)
+                {
+                    int index = row.Index;
+                    if (index < consolidatedEvents.Count)
+                    {
+                        Keys oldKey = consolidatedEvents[index].KeyCode;
+                        if (oldKey != newKey)
+                        {
+                            consolidatedEvents[index].KeyCode = newKey;
+                            row.Cells["KeyCode"].Value = newKeyName;
+                            row.Tag = newKey;
+                            hasUnsavedChanges = true;
+                        }
+                    }
+                }
+            };
 
             Panel btnPanel = new Panel
             {
@@ -1098,12 +1197,13 @@ namespace MapleStoryMacro
             };
 
             Button deleteBtn = new Button { Text = "刪除選中", Width = 100, Height = 30, Left = 10, Top = 10 };
-            Button closeBtn = new Button { Text = "關閉", Width = 100, Height = 30, Left = 120, Top = 10 };
+            Button saveBtn = new Button { Text = "💾 儲存", Width = 100, Height = 30, Left = 120, Top = 10, ForeColor = Color.Green };
+            Button closeBtn = new Button { Text = "關閉", Width = 100, Height = 30, Left = 230, Top = 10 };
 
             Label infoLabel = new Label
             {
                 Text = $"原始事件: {recordedEvents.Count} | 整合後: {consolidatedEvents.Count}",
-                Left = 240,
+                Left = 350,
                 Top = 15,
                 Width = 300,
                 ForeColor = Color.Gray
@@ -1123,24 +1223,78 @@ namespace MapleStoryMacro
                         if (index < consolidatedEvents.Count)
                         {
                             var evtToRemove = consolidatedEvents[index];
-                            // 從原始事件中移除對應的事件
+                            // 從原始事件中移除對應的事件（使用 OriginalKeyCode 以正確匹配）
                             recordedEvents.RemoveAll(e =>
-                                e.KeyCode == evtToRemove.KeyCode &&
+                                e.KeyCode == evtToRemove.OriginalKeyCode &&
                                 e.Timestamp >= evtToRemove.StartTime &&
                                 e.Timestamp <= evtToRemove.EndTime);
                             consolidatedEvents.RemoveAt(index);
                             dgv.Rows.RemoveAt(index);
                         }
                     }
+                    hasUnsavedChanges = true;
                     lblRecordingStatus.Text = $"已編輯 | 事件數: {recordedEvents.Count}";
                     infoLabel.Text = $"原始事件: {recordedEvents.Count} | 整合後: {consolidatedEvents.Count}";
                     AddLog($"✅ 已刪除 {selectedIndices.Count} 個動作");
                 }
             };
 
-            closeBtn.Click += (s, args) => editorForm.Close();
+            saveBtn.Click += (s, args) =>
+            {
+                // 將整合事件的按鍵更改套用回原始事件
+                int changedCount = 0;
+                foreach (var consolidated in consolidatedEvents)
+                {
+                    if (consolidated.KeyCode == consolidated.OriginalKeyCode)
+                        continue; // 未更改，跳過
+
+                    // 找出時間範圍內、且匹配原始按鍵的事件
+                    foreach (var evt in recordedEvents)
+                    {
+                        if (evt.Timestamp >= consolidated.StartTime &&
+                            evt.Timestamp <= consolidated.EndTime &&
+                            evt.KeyCode == consolidated.OriginalKeyCode)
+                        {
+                            evt.KeyCode = consolidated.KeyCode;
+                            changedCount++;
+                        }
+                    }
+                    // 更新 OriginalKeyCode 以反映已儲存的狀態
+                    consolidated.OriginalKeyCode = consolidated.KeyCode;
+                }
+
+                hasUnsavedChanges = false;
+                lblRecordingStatus.Text = $"已編輯 | 事件數: {recordedEvents.Count}";
+                infoLabel.Text = $"原始事件: {recordedEvents.Count} | 整合後: {consolidatedEvents.Count}";
+                AddLog($"✅ 已儲存編輯 (更改了 {changedCount} 個原始事件)");
+                MessageBox.Show($"已儲存！更改了 {changedCount} 個原始事件。", "儲存成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            };
+
+            closeBtn.Click += (s, args) =>
+            {
+                if (hasUnsavedChanges)
+                {
+                    var result = MessageBox.Show("有未儲存的變更，是否儲存？", "未儲存的變更",
+                        MessageBoxButtons.YesNoCancel, MessageBoxIcon.Warning);
+                    if (result == DialogResult.Yes)
+                    {
+                        saveBtn.PerformClick();
+                        editorForm.Close();
+                    }
+                    else if (result == DialogResult.No)
+                    {
+                        editorForm.Close();
+                    }
+                    // Cancel: 不關閉
+                }
+                else
+                {
+                    editorForm.Close();
+                }
+            };
 
             btnPanel.Controls.Add(deleteBtn);
+            btnPanel.Controls.Add(saveBtn);
             btnPanel.Controls.Add(closeBtn);
             btnPanel.Controls.Add(infoLabel);
 
@@ -1158,6 +1312,7 @@ namespace MapleStoryMacro
         private class ConsolidatedKeyEvent
         {
             public Keys KeyCode { get; set; }
+            public Keys OriginalKeyCode { get; set; }
             public double StartTime { get; set; }
             public double EndTime { get; set; }
             public double Duration => EndTime - StartTime;
@@ -1190,11 +1345,12 @@ namespace MapleStoryMacro
                     if (keyDownTimes.TryGetValue(evt.KeyCode, out double startTime))
                     {
                         consolidated.Add(new ConsolidatedKeyEvent
-                        {
-                            KeyCode = evt.KeyCode,
-                            StartTime = startTime,
-                            EndTime = evt.Timestamp
-                        });
+                            {
+                                KeyCode = evt.KeyCode,
+                                OriginalKeyCode = evt.KeyCode,
+                                StartTime = startTime,
+                                EndTime = evt.Timestamp
+                            });
                         keyDownTimes.Remove(evt.KeyCode);
                     }
                 }
@@ -1206,6 +1362,7 @@ namespace MapleStoryMacro
                 consolidated.Add(new ConsolidatedKeyEvent
                 {
                     KeyCode = kvp.Key,
+                    OriginalKeyCode = kvp.Key,
                     StartTime = kvp.Value,
                     EndTime = events.Max(e => e.Timestamp)
                 });
@@ -2025,6 +2182,9 @@ namespace MapleStoryMacro
             monitorTimer?.Stop();
             schedulerTimer?.Stop();   // 停止定時執行計時器
 
+            // 自動儲存設定（靜默，不顯示錯誤對話框）
+            try { SaveSettingsToFile(SettingsFilePath, ""); } catch { }
+
             AddLog("應用程式已關閉");
         }
 
@@ -2072,7 +2232,7 @@ namespace MapleStoryMacro
             {
                 Text = "⚙ 熱鍵與進階設定",
                 Width = 450,
-                Height = 400,
+                Height = 340,
                 StartPosition = FormStartPosition.CenterParent,
                 Owner = this,
                 FormBorderStyle = FormBorderStyle.FixedDialog,
@@ -2191,22 +2351,11 @@ namespace MapleStoryMacro
             };
 
             // 按鈕
-            Button btnDiag = new Button
-            {
-                Text = "🔍 輸入方式診斷",
-                Left = 20,
-                Top = 240,
-                Width = 150,
-                Height = 30,
-                BackColor = Color.FromArgb(120, 80, 40),
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
-            };
             Button btnSave = new Button
             {
                 Text = "儲存",
                 Left = 180,
-                Top = 290,
+                Top = 250,
                 Width = 80,
                 Height = 30,
                 BackColor = Color.FromArgb(0, 122, 204),
@@ -2217,7 +2366,7 @@ namespace MapleStoryMacro
             {
                 Text = "取消",
                 Left = 270,
-                Top = 290,
+                Top = 250,
                 Width = 80,
                 Height = 30,
                 BackColor = Color.FromArgb(80, 80, 85),
@@ -2240,13 +2389,11 @@ namespace MapleStoryMacro
 
             btnCancel.Click += (s, args) => settingsForm.Close();
 
-            btnDiag.Click += (s, args) => OpenInputDiagnostic();
-
             settingsForm.Controls.AddRange(new Control[]
             {
                 lblPlay, txtPlay, lblStop, txtStop, chkEnabled,
                 lblArrowMode, cmbArrowMode, lblArrowHint,
-                lblHint, btnDiag, btnSave, btnCancel
+                lblHint, btnSave, btnCancel
             });
 
             settingsForm.ShowDialog();
@@ -2412,13 +2559,17 @@ namespace MapleStoryMacro
             // 處理按鍵欄位的按鍵輸入
             dgv.EditingControlShowing += (s, args) =>
             {
-                if (dgv.CurrentCell.ColumnIndex == dgv.Columns["KeyCode"].Index)
+                if (args.Control is TextBox tb)
                 {
-            if (args.Control is TextBox tb)
+                    // 先無條件移除舊的處理器（避免殘留到其他欄位）
+                    tb.KeyDown -= CustomKeyCell_KeyDown;
+                    tb.PreviewKeyDown -= CustomKeyCell_PreviewKeyDown;
+
+                    if (dgv.CurrentCell.ColumnIndex == dgv.Columns["KeyCode"].Index)
                     {
-                        // 移除舊的事件處理器
-                        tb.KeyDown -= CustomKeyCell_KeyDown;
+                        // 只在 KeyCode 欄位時附加按鍵捕獲
                         tb.KeyDown += CustomKeyCell_KeyDown;
+                        tb.PreviewKeyDown += CustomKeyCell_PreviewKeyDown;
                     }
                 }
             };
@@ -2547,6 +2698,14 @@ namespace MapleStoryMacro
         }
 
         /// <summary>
+        /// 自定義按鍵欄位的 PreviewKeyDown 處理（讓延伸鍵如 End, PageUp, PageDown 等被視為輸入鍵）
+        /// </summary>
+        private void CustomKeyCell_PreviewKeyDown(object? sender, PreviewKeyDownEventArgs e)
+        {
+            e.IsInputKey = true;
+        }
+
+        /// <summary>
         /// 自定義按鍵欄位的按鍵處理
         /// </summary>
         private void CustomKeyCell_KeyDown(object? sender, KeyEventArgs e)
@@ -2583,9 +2742,9 @@ namespace MapleStoryMacro
         {
             Form schedForm = new Form
             {
-                Text = "⏰ 定時執行設定",
-                Width = 400,
-                Height = 280,
+                Text = "⏰ 排程管理",
+                Width = 650,
+                Height = 580,
                 StartPosition = FormStartPosition.CenterParent,
                 Owner = this,
                 FormBorderStyle = FormBorderStyle.FixedDialog,
@@ -2596,372 +2755,327 @@ namespace MapleStoryMacro
 
             Label lblTitle = new Label
             {
-                Text = "設定時間自動開始播放腳本",
-                Left = 20,
-                Top = 20,
-                Width = 350,
+                Text = "設定排程任務，可指定腳本、開始/結束時間",
+                Left = 20, Top = 15, Width = 600,
                 ForeColor = Color.LightGray,
                 Font = new Font("Microsoft JhengHei UI", 10F)
             };
 
-            // 時間選擇
-            Label lblTime = new Label { Text = "執行時間：", Left = 20, Top = 60, Width = 80, ForeColor = Color.White };
-            DateTimePicker dtpTime = new DateTimePicker
+            // ===== 新增排程區塊 =====
+            Label lblNewTask = new Label
             {
-                Left = 110,
-                Top = 57,
-                Width = 200,
+                Text = "📋 新增排程",
+                Left = 20, Top = 45, Width = 200,
+                ForeColor = Color.Cyan,
+                Font = new Font("Microsoft JhengHei UI", 10F, FontStyle.Bold)
+            };
+
+            // 腳本選擇
+            Label lblScript = new Label { Text = "腳本：", Left = 20, Top = 75, Width = 50, ForeColor = Color.White };
+            TextBox txtScriptPath = new TextBox
+            {
+                Left = 75, Top = 72, Width = 420, ReadOnly = true,
+                BackColor = Color.FromArgb(60, 60, 65), ForeColor = Color.White,
+                Text = currentScriptPath ?? "(使用當前已載入的腳本)"
+            };
+            Button btnBrowse = new Button
+            {
+                Text = "...", Left = 500, Top = 71, Width = 35, Height = 25,
+                BackColor = Color.FromArgb(80, 80, 85), ForeColor = Color.White, FlatStyle = FlatStyle.Flat
+            };
+            Button btnUseCurrent = new Button
+            {
+                Text = "當前", Left = 540, Top = 71, Width = 50, Height = 25,
+                BackColor = Color.FromArgb(0, 100, 160), ForeColor = Color.White, FlatStyle = FlatStyle.Flat
+            };
+
+            btnBrowse.Click += (s, args) =>
+            {
+                OpenFileDialog ofd = new OpenFileDialog
+                {
+                    Filter = "Maple 腳本|*.mscript|舊版 JSON 腳本|*.json|所有檔案|*.*",
+                    Title = "選擇排程腳本"
+                };
+                if (ofd.ShowDialog() == DialogResult.OK)
+                {
+                    txtScriptPath.Text = ofd.FileName;
+                    txtScriptPath.Tag = ofd.FileName;
+                }
+            };
+
+            btnUseCurrent.Click += (s, args) =>
+            {
+                if (recordedEvents.Count > 0)
+                {
+                    txtScriptPath.Text = currentScriptPath ?? "(使用當前已載入的腳本)";
+                    txtScriptPath.Tag = currentScriptPath;
+                }
+                else
+                {
+                    MessageBox.Show("當前沒有已載入的腳本！", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            };
+
+            // 開始時間
+            Label lblStart = new Label { Text = "開始：", Left = 20, Top = 108, Width = 50, ForeColor = Color.White };
+            DateTimePicker dtpStart = new DateTimePicker
+            {
+                Left = 75, Top = 105, Width = 200,
                 Format = DateTimePickerFormat.Custom,
                 CustomFormat = "yyyy-MM-dd HH:mm:ss",
                 Value = DateTime.Now.AddMinutes(5)
             };
 
-            // 當前狀態
-            Label lblStatus = new Label
+            // 結束時間
+            Label lblEnd = new Label { Text = "結束：", Left = 290, Top = 108, Width = 50, ForeColor = Color.White };
+            CheckBox chkEndTime = new CheckBox
             {
-                Text = scheduledStartTime.HasValue
-                    ? $"目前已排程：{scheduledStartTime.Value:HH:mm:ss}"
-                    : "目前無排程",
-                Left = 20,
-                Top = 100,
-                Width = 300,
-                ForeColor = scheduledStartTime.HasValue ? Color.Lime : Color.Gray
+                Text = "", Left = 340, Top = 108, Width = 20,
+                Checked = false, ForeColor = Color.White
+            };
+            DateTimePicker dtpEnd = new DateTimePicker
+            {
+                Left = 365, Top = 105, Width = 200,
+                Format = DateTimePickerFormat.Custom,
+                CustomFormat = "yyyy-MM-dd HH:mm:ss",
+                Value = DateTime.Now.AddHours(1),
+                Enabled = false
+            };
+            chkEndTime.CheckedChanged += (s, args) => dtpEnd.Enabled = chkEndTime.Checked;
+
+            // 循環次數
+            Label lblLoop = new Label { Text = "循環：", Left = 20, Top = 140, Width = 50, ForeColor = Color.White };
+            NumericUpDown numLoop = new NumericUpDown
+            {
+                Left = 75, Top = 137, Width = 80,
+                Minimum = 1, Maximum = 9999, Value = (int)numPlayTimes.Value,
+                BackColor = Color.FromArgb(60, 60, 65), ForeColor = Color.White
             };
 
-            // 按鈕
-            Button btnSet = new Button
+            Label lblLoopHint = new Label
             {
-                Text = "設定排程",
-                Left = 50,
-                Top = 150,
-                Width = 100,
-                Height = 35,
-                BackColor = Color.FromArgb(0, 150, 80),
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
+                Text = "勾選「結束」可設定自動停止時間",
+                Left = 165, Top = 140, Width = 300,
+                ForeColor = Color.Gray, Font = new Font("Microsoft JhengHei UI", 8.5F)
             };
 
-            Button btnClear = new Button
+            // 新增按鈕
+            Button btnAddTask = new Button
             {
-                Text = "取消排程",
-                Left = 160,
-                Top = 150,
-                Width = 100,
-                Height = 35,
-                BackColor = Color.FromArgb(150, 80, 60),
+                Text = "➕ 新增排程",
+                Left = 20, Top = 170, Width = 120, Height = 30,
+                BackColor = Color.FromArgb(0, 150, 80), ForeColor = Color.White, FlatStyle = FlatStyle.Flat
+            };
+
+            // ===== 排程清單 =====
+            Label lblListTitle = new Label
+            {
+                Text = "📅 排程清單",
+                Left = 20, Top = 210, Width = 200,
+                ForeColor = Color.Yellow,
+                Font = new Font("Microsoft JhengHei UI", 10F, FontStyle.Bold)
+            };
+
+            DataGridView dgv = new DataGridView
+            {
+                Left = 20, Top = 235, Width = 590, Height = 220,
+                BackgroundColor = Color.FromArgb(30, 30, 35),
                 ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
+                GridColor = Color.FromArgb(60, 60, 65),
+                BorderStyle = BorderStyle.FixedSingle,
+                AllowUserToAddRows = false,
+                AllowUserToDeleteRows = false,
+                ReadOnly = true,
+                SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+                RowHeadersVisible = false,
+                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+                ColumnHeadersDefaultCellStyle = new DataGridViewCellStyle
+                {
+                    BackColor = Color.FromArgb(50, 50, 55), ForeColor = Color.White
+                },
+                DefaultCellStyle = new DataGridViewCellStyle
+                {
+                    BackColor = Color.FromArgb(40, 40, 45), ForeColor = Color.White,
+                    SelectionBackColor = Color.FromArgb(0, 100, 180)
+                }
+            };
+
+            dgv.Columns.Add("Script", "腳本");
+            dgv.Columns.Add("StartTime", "開始時間");
+            dgv.Columns.Add("EndTime", "結束時間");
+            dgv.Columns.Add("Loop", "循環");
+            dgv.Columns.Add("Status", "狀態");
+
+            dgv.Columns["Script"].FillWeight = 30;
+            dgv.Columns["StartTime"].FillWeight = 25;
+            dgv.Columns["EndTime"].FillWeight = 25;
+            dgv.Columns["Loop"].FillWeight = 10;
+            dgv.Columns["Status"].FillWeight = 10;
+
+            Action refreshTaskList = () =>
+            {
+                dgv.Rows.Clear();
+                foreach (var task in scheduleTasks)
+                {
+                    string scriptName = string.IsNullOrEmpty(task.ScriptPath) ? "(當前腳本)" : Path.GetFileName(task.ScriptPath);
+                    string endTimeStr = task.EndTime.HasValue ? task.EndTime.Value.ToString("HH:mm:ss") : "不限";
+                    string status = task.HasStarted ? "已觸發" : (task.Enabled ? "等待中" : "已完成");
+                    dgv.Rows.Add(scriptName, task.StartTime.ToString("HH:mm:ss"), endTimeStr, task.LoopCount, status);
+                }
+            };
+            refreshTaskList();
+
+            btnAddTask.Click += (s, args) =>
+            {
+                if (dtpStart.Value <= DateTime.Now)
+                {
+                    MessageBox.Show("開始時間必須為未來！", "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                if (chkEndTime.Checked && dtpEnd.Value <= dtpStart.Value)
+                {
+                    MessageBox.Show("結束時間必須晚於開始時間！", "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                string? scriptPath = txtScriptPath.Tag as string;
+                if (string.IsNullOrEmpty(scriptPath) && recordedEvents.Count == 0)
+                {
+                    MessageBox.Show("請選擇腳本或先載入腳本！", "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                var newTask = new ScheduleTask
+                {
+                    ScriptPath = scriptPath ?? string.Empty,
+                    StartTime = dtpStart.Value,
+                    EndTime = chkEndTime.Checked ? dtpEnd.Value : null,
+                    LoopCount = (int)numLoop.Value,
+                    Enabled = true,
+                    HasStarted = false
+                };
+
+                scheduleTasks.Add(newTask);
+                schedulerTimer.Start();
+                refreshTaskList();
+
+                string endInfo = chkEndTime.Checked ? $", 結束={dtpEnd.Value:HH:mm:ss}" : "";
+                AddLog($"新增排程：{(string.IsNullOrEmpty(scriptPath) ? "當前腳本" : Path.GetFileName(scriptPath))}, 開始={dtpStart.Value:HH:mm:ss}{endInfo}, 循環={numLoop.Value}");
+            };
+
+            // 刪除與清空按鈕
+            Button btnRemove = new Button
+            {
+                Text = "🗑️ 刪除選中",
+                Left = 20, Top = 465, Width = 110, Height = 30,
+                BackColor = Color.FromArgb(150, 60, 60), ForeColor = Color.White, FlatStyle = FlatStyle.Flat
+            };
+
+            Button btnClearAll = new Button
+            {
+                Text = "清空全部",
+                Left = 140, Top = 465, Width = 90, Height = 30,
+                BackColor = Color.FromArgb(120, 80, 40), ForeColor = Color.White, FlatStyle = FlatStyle.Flat
             };
 
             Button btnClose = new Button
             {
                 Text = "關閉",
-                Left = 270,
-                Top = 150,
-                Width = 80,
-                Height = 35,
-                BackColor = Color.FromArgb(80, 80, 85),
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
+                Left = 530, Top = 465, Width = 80, Height = 30,
+                BackColor = Color.FromArgb(80, 80, 85), ForeColor = Color.White, FlatStyle = FlatStyle.Flat
             };
 
-            btnSet.Click += (s, args) =>
+            btnRemove.Click += (s, args) =>
             {
-                if (dtpTime.Value <= DateTime.Now)
+                if (dgv.SelectedRows.Count > 0)
                 {
-                    MessageBox.Show("請選擇未來的時間！", "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return;
+                    var indices = dgv.SelectedRows.Cast<DataGridViewRow>().Select(r => r.Index).OrderByDescending(i => i).ToList();
+                    foreach (int idx in indices)
+                    {
+                        if (idx < scheduleTasks.Count)
+                            scheduleTasks.RemoveAt(idx);
+                    }
+                    refreshTaskList();
+                    AddLog($"已刪除 {indices.Count} 個排程");
                 }
-
-                if (recordedEvents.Count == 0)
-                {
-                    MessageBox.Show("請先載入或錄製腳本！", "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return;
-                }
-
-                scheduledStartTime = dtpTime.Value;
-                schedulerTimer.Start();
-                lblStatus.Text = $"已排程：{scheduledStartTime.Value:yyyy-MM-dd HH:mm:ss}";
-                lblStatus.ForeColor = Color.Lime;
-                AddLog($"定時執行已設定：{scheduledStartTime.Value:HH:mm:ss}");
-                MessageBox.Show($"已設定在 {scheduledStartTime.Value:HH:mm:ss} 自動開始播放！", "設定完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
             };
 
-            btnClear.Click += (s, args) =>
+            btnClearAll.Click += (s, args) =>
             {
-                scheduledStartTime = null;
+                scheduleTasks.Clear();
                 schedulerTimer.Stop();
-                lblStatus.Text = "目前無排程";
-                lblStatus.ForeColor = Color.Gray;
-                AddLog("定時執行已取消");
+                refreshTaskList();
+                AddLog("已清空所有排程");
             };
 
             btnClose.Click += (s, args) => schedForm.Close();
 
-            // 倒數顯示
+            // 倒數計時
             Label lblCountdown = new Label
             {
-                Left = 20,
-                Top = 200,
-                Width = 350,
-                ForeColor = Color.Yellow
+                Left = 240, Top = 470, Width = 280,
+                ForeColor = Color.Yellow, Font = new Font("Microsoft JhengHei UI", 9F)
             };
 
             System.Windows.Forms.Timer countdownTimer = new System.Windows.Forms.Timer { Interval = 1000 };
             countdownTimer.Tick += (s, args) =>
             {
-                if (scheduledStartTime.HasValue)
+                var nextTask = scheduleTasks.Where(t => t.Enabled && !t.HasStarted).OrderBy(t => t.StartTime).FirstOrDefault();
+                if (nextTask != null)
                 {
-                    TimeSpan remaining = scheduledStartTime.Value - DateTime.Now;
+                    TimeSpan remaining = nextTask.StartTime - DateTime.Now;
                     if (remaining.TotalSeconds > 0)
-                    {
-                        lblCountdown.Text = $"距離執行還有：{remaining:hh\\:mm\\:ss}";
-                    }
+                        lblCountdown.Text = $"下個排程：{remaining:hh\\:mm\\:ss} 後開始";
                     else
-                    {
-                        lblCountdown.Text = "正在執行...";
-                    }
+                        lblCountdown.Text = "正在觸發...";
                 }
                 else
                 {
-                    lblCountdown.Text = "";
+                    var activeTask = scheduleTasks.Where(t => t.HasStarted && t.Enabled && t.EndTime.HasValue).FirstOrDefault();
+                    if (activeTask != null)
+                    {
+                        TimeSpan remaining = activeTask.EndTime!.Value - DateTime.Now;
+                        if (remaining.TotalSeconds > 0)
+                            lblCountdown.Text = $"自動停止：{remaining:hh\\:mm\\:ss} 後";
+                        else
+                            lblCountdown.Text = "正在停止...";
+                    }
+                    else
+                    {
+                        lblCountdown.Text = scheduleTasks.Count > 0 ? "所有排程已完成" : "";
+                    }
                 }
+                refreshTaskList();
             };
             countdownTimer.Start();
 
             schedForm.FormClosing += (s, args) => countdownTimer.Stop();
-            schedForm.Controls.AddRange(new Control[] { lblTitle, lblTime, dtpTime, lblStatus, btnSet, btnClear, btnClose, lblCountdown });
+
+            schedForm.Controls.AddRange(new Control[]
+            {
+                lblTitle, lblNewTask,
+                lblScript, txtScriptPath, btnBrowse, btnUseCurrent,
+                lblStart, dtpStart, lblEnd, chkEndTime, dtpEnd,
+                lblLoop, numLoop, lblLoopHint,
+                btnAddTask,
+                lblListTitle, dgv,
+                btnRemove, btnClearAll, btnClose, lblCountdown
+            });
+
             schedForm.ShowDialog();
         }
 
         /// <summary>
-        /// 顯示執行統計
+        /// 顯示即時執行統計視窗
         /// </summary>
         private void ShowStatistics()
         {
-            string stats = statistics.GetFormattedStats();
-
-            // 加入自定義按鍵統計
-            string customKeyStats = "\n\n自定義按鍵觸發次數：";
-            for (int i = 0; i < 15; i++)
+            Form statsForm = new Form
             {
-                if (customKeySlots[i].Enabled && customKeySlots[i].KeyCode != Keys.None)
-                {
-                    customKeyStats += $"\n  #{i + 1} {GetKeyDisplayName(customKeySlots[i].KeyCode)}: {statistics.CustomKeyTriggerCounts[i]} 次";
-                }
-            }
-
-            if (customKeySlots.Any(s => s.Enabled && s.KeyCode != Keys.None))
-            {
-                stats += customKeyStats;
-            }
-
-            DialogResult result = MessageBox.Show(
-                stats + "\n\n是否重置統計？",
-                "📊 執行統計",
-                MessageBoxButtons.YesNo,
-                MessageBoxIcon.Information);
-
-            if (result == DialogResult.Yes)
-            {
-                statistics.Reset();
-                AddLog("統計資料已重置");
-                MessageBox.Show("統計資料已重置！", "完成", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            }
-        }
-
-        /// <summary>
-        /// 取得目標進程的 exe 路徑（支援跨架構：64-bit 宏程式讀取 32-bit 遊戲進程）
-        /// </summary>
-        private string? GetProcessExePath(uint processId)
-        {
-            IntPtr hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, processId);
-            if (hProcess == IntPtr.Zero)
-                return null;
-
-            try
-            {
-                var sb = new StringBuilder(1024);
-                uint size = (uint)sb.Capacity;
-                if (QueryFullProcessImageName(hProcess, 0, sb, ref size))
-                {
-                    return sb.ToString();
-                }
-                return null;
-            }
-            finally
-            {
-                CloseHandle(hProcess);
-            }
-        }
-
-        /// <summary>
-        /// 列舉目標進程載入的模組名稱（DLL 列表）
-        /// </summary>
-        private List<string> GetProcessModules(uint processId)
-        {
-            var modules = new List<string>();
-            IntPtr hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, processId);
-            if (hProcess == IntPtr.Zero)
-                return modules;
-
-            try
-            {
-                IntPtr[] moduleHandles = new IntPtr[1024];
-                if (EnumProcessModulesEx(hProcess, moduleHandles, (uint)(IntPtr.Size * moduleHandles.Length), out uint needed, LIST_MODULES_ALL))
-                {
-                    int count = (int)(needed / IntPtr.Size);
-                    var sb = new StringBuilder(256);
-                    for (int i = 0; i < count; i++)
-                    {
-                        sb.Clear();
-                        if (GetModuleBaseName(hProcess, moduleHandles[i], sb, (uint)sb.Capacity) > 0)
-                        {
-                            modules.Add(sb.ToString().ToLowerInvariant());
-                        }
-                    }
-                }
-            }
-            catch { }
-            finally
-            {
-                CloseHandle(hProcess);
-            }
-
-            return modules;
-        }
-
-        /// <summary>
-        /// 掃描遊戲 exe 的 PE Import Table，尋找鍵盤輸入相關 API
-        /// 這是非侵入式的：只讀取磁碟上的檔案，不注入任何東西
-        /// </summary>
-        private Dictionary<string, bool> ScanExeForKeyboardAPIs(string exePath)
-        {
-            // 要搜尋的 API 名稱（按優先順序排列）
-            var apiNames = new[]
-            {
-                "GetAsyncKeyState",        // 非同步鍵盤狀態（硬體層）
-                "GetKeyState",             // 同步鍵盤狀態（訊息佇列）
-                "GetKeyboardState",        // 取得整個鍵盤狀態陣列
-                "DirectInput8Create",      // DirectInput 8
-                "DirectInputCreateEx",     // DirectInput 舊版
-                "DirectInputCreate",       // DirectInput 最舊版
-                "GetRawInputData",         // Raw Input API
-                "RegisterRawInputDevices", // Raw Input 註冊
-                "PeekMessageA",            // 訊息迴圈 (ANSI)
-                "PeekMessageW",            // 訊息迴圈 (Unicode)
-                "GetMessageA",             // 訊息迴圈 (ANSI)
-                "GetMessageW",             // 訊息迴圈 (Unicode)
-            };
-
-            var results = new Dictionary<string, bool>();
-            foreach (var api in apiNames)
-                results[api] = false;
-
-            try
-            {
-                // 讀取 exe 檔案的原始二進位資料
-                byte[] fileBytes = File.ReadAllBytes(exePath);
-
-                // 將整個檔案轉為 ASCII 字串用於搜尋
-                // PE import table 中的 API 名稱都是 ASCII
-                // 注意：這是一種簡易搜尋法，不解析 PE 結構，但對於偵測 import 是足夠的
-                string fileAsAscii = System.Text.Encoding.ASCII.GetString(fileBytes);
-
-                // 搜尋每個 API 名稱
-                foreach (var api in apiNames)
-                {
-                    // 簡易搜尋：直接在二進位中找 ASCII 字串
-                    int index = fileAsAscii.IndexOf(api, StringComparison.Ordinal);
-                    if (index >= 0)
-                    {
-                        results[api] = true;
-                    }
-                }
-
-                // 特殊處理：GetKeyState 可能是 GetAsyncKeyState 的子字串
-                // 需要確認是否有獨立的 GetKeyState（不是 GetAsyncKeyState 的一部分）
-                if (results["GetKeyState"] && results["GetAsyncKeyState"])
-                {
-                    // 計算 GetKeyState 出現次數（不含 GetAsyncKeyState）
-                    int startIdx = 0;
-                    int independentCount = 0;
-                    while (startIdx < fileAsAscii.Length)
-                    {
-                        int found = fileAsAscii.IndexOf("GetKeyState", startIdx, StringComparison.Ordinal);
-                        if (found < 0) break;
-
-                        // 檢查前面是否有 "Async"
-                        bool isPartOfAsync = found >= 5 &&
-                            fileAsAscii.Substring(found - 5, 5) == "Async";
-
-                        if (!isPartOfAsync)
-                        {
-                            independentCount++;
-                        }
-
-                        startIdx = found + 11; // "GetKeyState".Length
-                    }
-
-                    // 如果沒有獨立的 GetKeyState，只有作為 GetAsyncKeyState 的子字串
-                    results["GetKeyState"] = independentCount > 0;
-                }
-            }
-            catch (Exception ex)
-            {
-                AddLog($"PE 掃描錯誤: {ex.Message}");
-            }
-
-            return results;
-        }
-
-        /// <summary>
-        /// 開啟輸入方式診斷視窗
-        /// </summary>
-        private void OpenInputDiagnostic()
-        {
-            if (targetWindowHandle == IntPtr.Zero || !IsWindow(targetWindowHandle))
-            {
-                MessageBox.Show("請先鎖定遊戲視窗！", "診斷", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            AddLog("🔍 開始輸入方式診斷...");
-
-            // 取得目標進程資訊
-            GetWindowThreadProcessId(targetWindowHandle, out uint processId);
-            if (processId == 0)
-            {
-                AddLog("❌ 無法取得目標進程 ID");
-                return;
-            }
-
-            // --- 1. 掃描 exe 的 import table ---
-            string? exePath = GetProcessExePath(processId);
-            Dictionary<string, bool>? apiResults = null;
-            if (exePath != null && File.Exists(exePath))
-            {
-                AddLog($"掃描 exe: {Path.GetFileName(exePath)}");
-                apiResults = ScanExeForKeyboardAPIs(exePath);
-            }
-            else
-            {
-                AddLog("⚠️ 無法取得 exe 路徑（可能權限不足）");
-            }
-
-            // --- 2. 檢查載入的模組 ---
-            var loadedModules = GetProcessModules(processId);
-            bool hasDInput8 = loadedModules.Contains("dinput8.dll");
-            bool hasDInput = loadedModules.Contains("dinput.dll");
-            bool hasXInput = loadedModules.Any(m => m.StartsWith("xinput"));
-            bool hasRawInput = false; // Raw Input 是 user32.dll 的一部分，無法從模組判斷
-
-            // --- 3. 建立診斷結果視窗 ---
-            Form diagForm = new Form
-            {
-                Text = "🔍 輸入方式診斷結果",
-                Width = 650,
-                Height = 580,
+                Text = "📊 即時執行統計",
+                Width = 450,
+                Height = 520,
                 StartPosition = FormStartPosition.CenterParent,
                 Owner = this,
                 FormBorderStyle = FormBorderStyle.FixedDialog,
@@ -2970,227 +3084,130 @@ namespace MapleStoryMacro
                 BackColor = Color.FromArgb(30, 30, 35)
             };
 
-            var resultBox = new RichTextBox
+            // 狀態指示燈
+            Label lblStatusIndicator = new Label
             {
-                Left = 10,
-                Top = 10,
-                Width = 610,
-                Height = 430,
-                ReadOnly = true,
-                BackColor = Color.FromArgb(20, 20, 25),
-                ForeColor = Color.LightGray,
-                Font = new Font("Consolas", 10F),
-                BorderStyle = BorderStyle.None,
-                ScrollBars = RichTextBoxScrollBars.Vertical
+                Left = 20, Top = 20, Width = 400, Height = 25,
+                ForeColor = statistics.CurrentSessionStart.HasValue ? Color.Lime : Color.Gray,
+                Font = new Font("Microsoft JhengHei UI", 12F, FontStyle.Bold),
+                Text = statistics.CurrentSessionStart.HasValue ? "● 播放中" : "○ 已停止"
             };
 
-            // 組裝結果文字
-            var sb = new StringBuilder();
-            sb.AppendLine("═══════════════════════════════════════════");
-            sb.AppendLine("  🔍 遊戲鍵盤輸入方式診斷報告");
-            sb.AppendLine("═══════════════════════════════════════════");
-            sb.AppendLine();
-
-            // 基本資訊
-            sb.AppendLine($"  進程 ID:    {processId}");
-            sb.AppendLine($"  EXE 路徑:   {exePath ?? "(未知)"}");
-            sb.AppendLine($"  架構:       {(IsProcess32Bit(processId) ? "32-bit" : "64-bit")}");
-            sb.AppendLine($"  載入模組數: {loadedModules.Count}");
-            sb.AppendLine();
-
-            // API 掃描結果
-            sb.AppendLine("───────────────────────────────────────────");
-            sb.AppendLine("  ◆ PE Import Table 掃描（exe 檔案內的 API 引用）");
-            sb.AppendLine("───────────────────────────────────────────");
-
-            if (apiResults != null)
+            // 當前會話區塊
+            Label lblSessionTitle = new Label
             {
-                void AppendApiResult(string api, string description, string impact)
+                Left = 20, Top = 55, Width = 200, Height = 20,
+                ForeColor = Color.Cyan, Font = new Font("Microsoft JhengHei UI", 10F, FontStyle.Bold),
+                Text = "📌 當前會話"
+            };
+
+            Label lblSessionTime = new Label
+            {
+                Left = 30, Top = 80, Width = 380, Height = 20,
+                ForeColor = Color.White, Font = new Font("Consolas", 10F),
+                Text = "會話時長: --:--:--"
+            };
+
+            Label lblCurrentLoop = new Label
+            {
+                Left = 30, Top = 105, Width = 380, Height = 20,
+                ForeColor = Color.White, Font = new Font("Consolas", 10F),
+                Text = "當前循環: 0"
+            };
+
+            Label lblScriptInfo = new Label
+            {
+                Left = 30, Top = 130, Width = 380, Height = 20,
+                ForeColor = Color.LightGray, Font = new Font("Microsoft JhengHei UI", 9F),
+                Text = $"腳本事件: {recordedEvents.Count} 個"
+            };
+
+            // 分隔線
+            Label lblSep1 = new Label
+            {
+                Left = 20, Top = 160, Width = 400, Height = 2,
+                BackColor = Color.FromArgb(60, 60, 65)
+            };
+
+            // 累計統計區塊
+            Label lblTotalTitle = new Label
+            {
+                Left = 20, Top = 170, Width = 200, Height = 20,
+                ForeColor = Color.Yellow, Font = new Font("Microsoft JhengHei UI", 10F, FontStyle.Bold),
+                Text = "📈 累計統計"
+            };
+
+            Label lblTotalPlays = new Label
+            {
+                Left = 30, Top = 195, Width = 380, Height = 20,
+                ForeColor = Color.White, Font = new Font("Consolas", 10F),
+                Text = $"播放次數: {statistics.TotalPlayCount}"
+            };
+
+            Label lblTotalTime = new Label
+            {
+                Left = 30, Top = 220, Width = 380, Height = 20,
+                ForeColor = Color.White, Font = new Font("Consolas", 10F),
+                Text = "總播放時長: 00:00:00"
+            };
+
+            Label lblLastPlay = new Label
+            {
+                Left = 30, Top = 245, Width = 380, Height = 20,
+                ForeColor = Color.LightGray, Font = new Font("Microsoft JhengHei UI", 9F),
+                Text = $"最後播放: {(statistics.LastPlayTime.HasValue ? statistics.LastPlayTime.Value.ToString("yyyy-MM-dd HH:mm:ss") : "從未播放")}"
+            };
+
+            // 分隔線
+            Label lblSep2 = new Label
+            {
+                Left = 20, Top = 275, Width = 400, Height = 2,
+                BackColor = Color.FromArgb(60, 60, 65)
+            };
+
+            // 自定義按鍵統計
+            Label lblCustomTitle = new Label
+            {
+                Left = 20, Top = 285, Width = 200, Height = 20,
+                ForeColor = Color.FromArgb(200, 150, 255), Font = new Font("Microsoft JhengHei UI", 10F, FontStyle.Bold),
+                Text = "⚡ 自定義按鍵觸發"
+            };
+
+            ListBox lstCustomKeys = new ListBox
+            {
+                Left = 30, Top = 310, Width = 380, Height = 100,
+                BackColor = Color.FromArgb(40, 40, 45),
+                ForeColor = Color.White,
+                BorderStyle = BorderStyle.FixedSingle,
+                Font = new Font("Consolas", 9F)
+            };
+
+            // 填入自定義按鍵統計
+            Action updateCustomKeyList = () =>
+            {
+                lstCustomKeys.Items.Clear();
+                bool hasAny = false;
+                for (int i = 0; i < 15; i++)
                 {
-                    string icon = apiResults.GetValueOrDefault(api) ? "✅" : "❌";
-                    sb.AppendLine($"  {icon} {api,-30} {description}");
-                    if (apiResults.GetValueOrDefault(api))
+                    if (customKeySlots[i].Enabled && customKeySlots[i].KeyCode != Keys.None)
                     {
-                        sb.AppendLine($"     → {impact}");
+                        hasAny = true;
+                        lstCustomKeys.Items.Add($"  #{i + 1} {GetKeyDisplayName(customKeySlots[i].KeyCode),-15} 觸發: {statistics.CustomKeyTriggerCounts[i]} 次");
                     }
                 }
-
-                AppendApiResult("GetAsyncKeyState", "硬體層鍵盤狀態",
-                    "輪詢硬體狀態，需要 keybd_event/SendInput 才能影響");
-                AppendApiResult("GetKeyState", "訊息佇列鍵盤狀態",
-                    "同步狀態，理論上 PostMessage 應有效（但實際可能需 TA）");
-                AppendApiResult("GetKeyboardState", "完整鍵盤狀態陣列",
-                    "類似 GetKeyState，取得所有按鍵狀態");
-
-                sb.AppendLine();
-                AppendApiResult("DirectInput8Create", "DirectInput 8",
-                    "DirectInput 輪詢，需要 DI 層級介入");
-                AppendApiResult("DirectInputCreateEx", "DirectInput (舊版)",
-                    "舊版 DirectInput");
-                AppendApiResult("DirectInputCreate", "DirectInput (最舊)",
-                    "最舊版 DirectInput");
-
-                sb.AppendLine();
-                AppendApiResult("GetRawInputData", "Raw Input 資料",
-                    "Raw Input 模式，只能透過 SendInput 影響");
-                AppendApiResult("RegisterRawInputDevices", "Raw Input 註冊",
-                    "使用 Raw Input 子系統");
-
-                sb.AppendLine();
-                AppendApiResult("PeekMessageA", "訊息迴圈 (A)",
-                    "可能透過 WM_KEYDOWN 接收按鍵（PostMessage 可能有效）");
-                AppendApiResult("PeekMessageW", "訊息迴圈 (W)",
-                    "可能透過 WM_KEYDOWN 接收按鍵（PostMessage 可能有效）");
-                AppendApiResult("GetMessageA", "訊息等待 (A)",
-                    "同 PeekMessage");
-                AppendApiResult("GetMessageW", "訊息等待 (W)",
-                    "同 PeekMessage");
-            }
-            else
-            {
-                sb.AppendLine("  ⚠️ 無法掃描（exe 路徑不可用或權限不足）");
-            }
-
-            // 模組檢查結果
-            sb.AppendLine();
-            sb.AppendLine("───────────────────────────────────────────");
-            sb.AppendLine("  ◆ 已載入模組檢查");
-            sb.AppendLine("───────────────────────────────────────────");
-            sb.AppendLine($"  {(hasDInput8 ? "✅" : "❌")} dinput8.dll    {(hasDInput8 ? "→ 遊戲使用 DirectInput 8!" : "(未載入)")}");
-            sb.AppendLine($"  {(hasDInput ? "✅" : "❌")} dinput.dll     {(hasDInput ? "→ 遊戲使用舊版 DirectInput!" : "(未載入)")}");
-            sb.AppendLine($"  {(hasXInput ? "✅" : "❌")} xinput*.dll    {(hasXInput ? "→ 遊戲使用 XInput (手柄)" : "(未載入)")}");
-
-            // 列出所有可能相關的模組
-            var relevantModules = loadedModules.Where(m =>
-                m.Contains("input") || m.Contains("hook") || m.Contains("key") ||
-                m.Contains("hid") || m.Contains("dinput")).ToList();
-            if (relevantModules.Any())
-            {
-                sb.AppendLine();
-                sb.AppendLine("  相關模組:");
-                foreach (var mod in relevantModules)
+                if (!hasAny)
                 {
-                    sb.AppendLine($"    • {mod}");
+                    lstCustomKeys.Items.Add("  (無啟用的自定義按鍵)");
                 }
-            }
-
-            // 綜合分析
-            sb.AppendLine();
-            sb.AppendLine("───────────────────────────────────────────");
-            sb.AppendLine("  ◆ 綜合分析與建議");
-            sb.AppendLine("───────────────────────────────────────────");
-
-            if (apiResults != null)
-            {
-                bool usesAsyncKeyState = apiResults.GetValueOrDefault("GetAsyncKeyState");
-                bool usesKeyState = apiResults.GetValueOrDefault("GetKeyState");
-                bool usesDirectInput = hasDInput8 || hasDInput ||
-                    apiResults.GetValueOrDefault("DirectInput8Create") ||
-                    apiResults.GetValueOrDefault("DirectInputCreateEx") ||
-                    apiResults.GetValueOrDefault("DirectInputCreate");
-                bool usesRawInput = apiResults.GetValueOrDefault("GetRawInputData") ||
-                    apiResults.GetValueOrDefault("RegisterRawInputDevices");
-                bool usesMessageLoop = apiResults.GetValueOrDefault("PeekMessageA") ||
-                    apiResults.GetValueOrDefault("PeekMessageW") ||
-                    apiResults.GetValueOrDefault("GetMessageA") ||
-                    apiResults.GetValueOrDefault("GetMessageW");
-
-                if (usesDirectInput)
-                {
-                    sb.AppendLine("  🎮 遊戲使用 DirectInput");
-                    sb.AppendLine("     方向鍵很可能透過 DI 輪詢硬體狀態");
-                    sb.AppendLine("     → PostMessage 無法影響 DI");
-                    sb.AppendLine("     → keybd_event/SendInput 可以影響 DI");
-                    sb.AppendLine("     → 背景發送方向鍵時必然會影響前景");
-                    sb.AppendLine("     ★ 建議使用 S2C 模式（接受洩漏）");
-                }
-                else if (usesAsyncKeyState)
-                {
-                    sb.AppendLine("  ⚡ 遊戲使用 GetAsyncKeyState 輪詢");
-                    sb.AppendLine("     方向鍵透過硬體層狀態輪詢");
-                    sb.AppendLine("     → PostMessage 完全無效（這解釋了你的觀察！）");
-                    sb.AppendLine("     → 只有 keybd_event/SendInput 能影響");
-                    sb.AppendLine("     → 背景發送必然影響全域鍵盤狀態");
-                    sb.AppendLine("     ★ 建議使用 S2C 模式（接受洩漏）");
-                }
-                else if (usesKeyState)
-                {
-                    sb.AppendLine("  🔑 遊戲使用 GetKeyState 輪詢");
-                    sb.AppendLine("     方向鍵透過同步鍵盤狀態");
-                    sb.AppendLine("     → PostMessage 理論上應有效");
-                    sb.AppendLine("     → 但實測無效可能是遊戲的 message pump 機制問題");
-                    sb.AppendLine("     → AttachThreadInput + keybd_event 最可靠");
-                    sb.AppendLine("     ★ 建議使用 S2C 模式");
-                }
-                else if (usesRawInput)
-                {
-                    sb.AppendLine("  📡 遊戲使用 Raw Input");
-                    sb.AppendLine("     Raw Input 直接接收硬體事件");
-                    sb.AppendLine("     → PostMessage 無效");
-                    sb.AppendLine("     → SendInput 可能有效");
-                    sb.AppendLine("     ★ 建議使用 SWB 模式測試");
-                }
-                else if (usesMessageLoop)
-                {
-                    sb.AppendLine("  📨 遊戲使用訊息迴圈");
-                    sb.AppendLine("     可能透過 WM_KEYDOWN 接收按鍵");
-                    sb.AppendLine("     → PostMessage 可能有效（但你已確認無效）");
-                    sb.AppendLine("     → 可能同時搭配其他 API");
-                    sb.AppendLine("     ★ 需要進一步實驗測試");
-                }
-                else
-                {
-                    sb.AppendLine("  ❓ 未偵測到已知的鍵盤輸入 API");
-                    sb.AppendLine("     可能使用動態載入（GetProcAddress）");
-                    sb.AppendLine("     或使用非標準的輸入方式");
-                    sb.AppendLine("     ★ 建議用實驗測試確認");
-                }
-
-                // 通用建議
-                sb.AppendLine();
-                if (!usesDirectInput && !usesAsyncKeyState)
-                {
-                    sb.AppendLine("  💡 如果上述分析不符，遊戲可能使用 GetProcAddress");
-                    sb.AppendLine("     動態載入 API（不會出現在 import table 中）");
-                    sb.AppendLine("     → 建議使用下方「實驗測試」按鈕直接測試");
-                }
-            }
-
-            resultBox.Text = sb.ToString();
+            };
+            updateCustomKeyList();
 
             // 按鈕
-            Button btnRunTest = new Button
+            Button btnReset = new Button
             {
-                Text = "🧪 實驗測試（發送方向鍵）",
-                Left = 10,
-                Top = 450,
-                Width = 200,
-                Height = 35,
-                BackColor = Color.FromArgb(0, 122, 204),
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
-            };
-
-            Button btnCopy = new Button
-            {
-                Text = "📋 複製報告",
-                Left = 220,
-                Top = 450,
-                Width = 120,
-                Height = 35,
-                BackColor = Color.FromArgb(80, 80, 85),
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
-            };
-
-            Button btnModules = new Button
-            {
-                Text = "📦 完整模組列表",
-                Left = 350,
-                Top = 450,
-                Width = 130,
-                Height = 35,
-                BackColor = Color.FromArgb(80, 80, 85),
+                Text = "🔄 重置統計",
+                Left = 130, Top = 430, Width = 100, Height = 35,
+                BackColor = Color.FromArgb(150, 80, 60),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat
             };
@@ -3198,129 +3215,73 @@ namespace MapleStoryMacro
             Button btnClose = new Button
             {
                 Text = "關閉",
-                Left = 530,
-                Top = 450,
-                Width = 80,
-                Height = 35,
+                Left = 240, Top = 430, Width = 80, Height = 35,
                 BackColor = Color.FromArgb(80, 80, 85),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat
             };
 
-            Label lblTestHint = new Label
+            btnReset.Click += (s, args) =>
             {
-                Text = "💡 實驗測試會依序使用不同方法發送「→ 右方向鍵」各 500ms，請觀察遊戲角色是否移動",
-                Left = 10,
-                Top = 495,
-                Width = 610,
-                Height = 30,
-                ForeColor = Color.Yellow,
-                Font = new Font("Microsoft JhengHei UI", 8.5F)
+                if (MessageBox.Show("確定重置所有統計資料？", "重置統計", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
+                {
+                    statistics.Reset();
+                    AddLog("統計資料已重置");
+                }
             };
 
-            btnRunTest.Click += (s, args) =>
-            {
-                btnRunTest.Enabled = false;
-                btnRunTest.Text = "測試中...";
-                Thread testThread = new Thread(() => RunArrowKeyExperiment())
-                {
-                    IsBackground = true
-                };
-                testThread.Start();
+            btnClose.Click += (s, args) => statsForm.Close();
 
-                // 3 秒後恢復按鈕
-                var restoreTimer = new System.Windows.Forms.Timer { Interval = 5000 };
-                restoreTimer.Tick += (ts, ta) =>
+            // 即時更新 Timer
+            System.Windows.Forms.Timer refreshTimer = new System.Windows.Forms.Timer { Interval = 500 };
+            refreshTimer.Tick += (s, args) =>
+            {
+                bool isActive = statistics.CurrentSessionStart.HasValue;
+
+                // 狀態指示
+                lblStatusIndicator.Text = isActive ? "● 播放中" : "○ 已停止";
+                lblStatusIndicator.ForeColor = isActive ? Color.Lime : Color.Gray;
+
+                // 當前會話
+                if (isActive)
                 {
-                    btnRunTest.Enabled = true;
-                    btnRunTest.Text = "🧪 實驗測試（發送方向鍵）";
-                    restoreTimer.Stop();
-                    restoreTimer.Dispose();
-                };
-                restoreTimer.Start();
+                    TimeSpan sessionTime = DateTime.Now - statistics.CurrentSessionStart!.Value;
+                    lblSessionTime.Text = $"會話時長: {(int)sessionTime.TotalHours:D2}:{sessionTime.Minutes:D2}:{sessionTime.Seconds:D2}";
+                }
+                else
+                {
+                    lblSessionTime.Text = "會話時長: --:--:--";
+                }
+                lblCurrentLoop.Text = $"當前循環: {statistics.CurrentLoopCount}";
+                lblScriptInfo.Text = $"腳本事件: {recordedEvents.Count} 個";
+
+                // 累計統計（加上當前會話的時間）
+                double liveTotalSeconds = statistics.TotalPlayTimeSeconds;
+                if (isActive)
+                {
+                    liveTotalSeconds += (DateTime.Now - statistics.CurrentSessionStart!.Value).TotalSeconds;
+                }
+                TimeSpan totalTime = TimeSpan.FromSeconds(liveTotalSeconds);
+                lblTotalPlays.Text = $"播放次數: {statistics.TotalPlayCount + (isActive ? 1 : 0)}";
+                lblTotalTime.Text = $"總播放時長: {(int)totalTime.TotalHours:D2}:{totalTime.Minutes:D2}:{totalTime.Seconds:D2}";
+                lblLastPlay.Text = $"最後播放: {(statistics.LastPlayTime.HasValue ? statistics.LastPlayTime.Value.ToString("yyyy-MM-dd HH:mm:ss") : (isActive ? "進行中..." : "從未播放"))}";
+
+                // 更新自定義按鍵統計
+                updateCustomKeyList();
             };
+            refreshTimer.Start();
 
-            btnCopy.Click += (s, args) =>
+            statsForm.FormClosing += (s, args) => refreshTimer.Stop();
+
+            statsForm.Controls.AddRange(new Control[]
             {
-                Clipboard.SetText(resultBox.Text);
-                AddLog("✅ 診斷報告已複製到剪貼簿");
-            };
+                lblStatusIndicator, lblSessionTitle, lblSessionTime, lblCurrentLoop, lblScriptInfo,
+                lblSep1, lblTotalTitle, lblTotalPlays, lblTotalTime, lblLastPlay,
+                lblSep2, lblCustomTitle, lstCustomKeys,
+                btnReset, btnClose
+            });
 
-            btnModules.Click += (s, args) =>
-            {
-                string moduleList = string.Join("\n", loadedModules.OrderBy(m => m).Select(m => $"  • {m}"));
-                MessageBox.Show($"進程 {processId} 的已載入模組 ({loadedModules.Count})：\n\n{moduleList}",
-                    "模組列表", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            };
-
-            btnClose.Click += (s, args) => diagForm.Close();
-
-            diagForm.Controls.AddRange(new Control[] { resultBox, btnRunTest, btnCopy, btnModules, btnClose, lblTestHint });
-            diagForm.ShowDialog();
-        }
-
-        /// <summary>
-        /// 實驗測試：依序使用不同方法發送右方向鍵，讓使用者觀察哪種有效
-        /// </summary>
-        private void RunArrowKeyExperiment()
-        {
-            if (targetWindowHandle == IntPtr.Zero || !IsWindow(targetWindowHandle))
-            {
-                this.BeginInvoke(new Action(() => AddLog("❌ 目標視窗無效")));
-                return;
-            }
-
-            var tests = new (string name, Action<bool> sendMethod)[]
-            {
-                ("純 PostMessage（WM_KEYDOWN/UP）", (isDown) =>
-                {
-                    SendKeyToWindow(targetWindowHandle, Keys.Right, isDown);
-                }),
-                ("PostMessage 到子視窗", (isDown) =>
-                {
-                    SendArrowKeyToChildWindow(targetWindowHandle, Keys.Right, isDown);
-                }),
-                ("AttachThreadInput + keybd_event（S2C）", (isDown) =>
-                {
-                    SendKeyWithThreadAttach(targetWindowHandle, Keys.Right, isDown);
-                }),
-                ("SendInput（前景模式）", (isDown) =>
-                {
-                    SendKeyForeground(Keys.Right, isDown);
-                }),
-            };
-
-            for (int i = 0; i < tests.Length; i++)
-            {
-                if (isPlaying) break; // 如果正在播放腳本則中斷
-
-                var test = tests[i];
-                int testNum = i + 1;
-
-                this.BeginInvoke(new Action(() =>
-                    AddLog($"🧪 測試 {testNum}/{tests.Length}: {test.name}")
-                ));
-
-                // 按下
-                test.sendMethod(true);
-                Thread.Sleep(500); // 持續 500ms
-                // 放開
-                test.sendMethod(false);
-
-                this.BeginInvoke(new Action(() =>
-                    AddLog($"   → 測試 {testNum} 結束，角色有移動嗎？")
-                ));
-
-                // 測試間隔 1 秒
-                if (i < tests.Length - 1)
-                    Thread.Sleep(1000);
-            }
-
-            this.BeginInvoke(new Action(() =>
-            {
-                AddLog("🧪 實驗測試完成！請檢查哪個測試讓角色移動了");
-                AddLog("   測試1=PostMessage | 測試2=PostMsg子視窗 | 測試3=TA+keybd_event | 測試4=SendInput");
-            }));
+            statsForm.ShowDialog();
         }
 
         private void UpdateUI()
@@ -3472,7 +3433,8 @@ namespace MapleStoryMacro
                 HotkeyEnabled = hotkeyEnabled,
                 WindowTitle = txtWindowTitle.Text,
                 ArrowKeyMode = (int)currentArrowKeyMode,
-                LastScriptPath = currentScriptPath
+                LastScriptPath = currentScriptPath,
+                ScheduleTasks = scheduleTasks.Where(t => t.Enabled && t.StartTime > DateTime.Now).ToList()
             };
 
             return settings;
@@ -3494,7 +3456,19 @@ namespace MapleStoryMacro
             if (!string.IsNullOrEmpty(settings.LastScriptPath) && File.Exists(settings.LastScriptPath))
             {
                 currentScriptPath = settings.LastScriptPath;
-                AddLog($"發現上次腳本: {Path.GetFileName(settings.LastScriptPath)}");
+                LoadScriptFromFile(settings.LastScriptPath);
+            }
+
+            // 載入排程任務（只恢復未來的排程）
+            if (settings.ScheduleTasks != null && settings.ScheduleTasks.Count > 0)
+            {
+                var futureTasks = settings.ScheduleTasks.Where(t => t.StartTime > DateTime.Now && t.Enabled).ToList();
+                if (futureTasks.Count > 0)
+                {
+                    scheduleTasks.AddRange(futureTasks);
+                    schedulerTimer.Start();
+                    AddLog($"已恢復 {futureTasks.Count} 個排程任務");
+                }
             }
 
             AddLog("全域設定已載入");
