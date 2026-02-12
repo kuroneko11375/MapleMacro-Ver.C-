@@ -19,6 +19,11 @@ namespace MapleStoryMacro
         public Keys KeyCode { get; set; } = Keys.None;
 
         /// <summary>
+        /// 修飾鍵 (Ctrl, Alt, Shift 的組合)
+        /// </summary>
+        public Keys Modifiers { get; set; } = Keys.None;
+
+        /// <summary>
         /// 施放間隔（秒）
         /// </summary>
         public double IntervalSeconds { get; set; } = 30.0;

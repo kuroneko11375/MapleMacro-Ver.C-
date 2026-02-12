@@ -81,6 +81,31 @@ namespace MapleStoryMacro
         /// 是否已觸發開始
         /// </summary>
         public bool HasStarted { get; set; } = false;
+
+        /// <summary>
+        /// 是否啟用回程功能（Enter → @FM → Enter → 等待 → 坐下）
+        /// </summary>
+        public bool ReturnToTownEnabled { get; set; } = false;
+
+        /// <summary>
+        /// 回程指令（預設 @FM）
+        /// </summary>
+        public string ReturnCommand { get; set; } = "@FM";
+
+        /// <summary>
+        /// 坐下按鍵（回程後自動觸發）
+        /// </summary>
+        public int SitDownKeyCode { get; set; } = (int)Keys.None;
+
+        /// <summary>
+        /// 坐下按鍵的修飾鍵
+        /// </summary>
+        public int SitDownKeyModifiers { get; set; } = (int)Keys.None;
+
+        /// <summary>
+        /// 回程後等待幾秒再坐下（預設 3 秒）
+        /// </summary>
+        public double SitDownDelaySeconds { get; set; } = 3.0;
     }
 
     /// <summary>
@@ -90,6 +115,7 @@ namespace MapleStoryMacro
     {
         public int SlotNumber { get; set; }
         public int KeyCode { get; set; } = (int)Keys.None;
+        public int Modifiers { get; set; } = (int)Keys.None;
         public double IntervalSeconds { get; set; } = 30.0;
         public bool Enabled { get; set; } = false;
         public double StartAtSecond { get; set; } = 0;

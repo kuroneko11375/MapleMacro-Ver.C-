@@ -171,6 +171,7 @@ namespace MapleStoryMacro
         // Windows message constants
         private const uint WM_KEYDOWN = 0x0100;
         private const uint WM_KEYUP = 0x0101;
+        private const uint WM_CHAR = 0x0102;
         private const uint WM_SYSKEYDOWN = 0x0104;
         private const uint WM_SYSKEYUP = 0x0105;
         private const uint MAPVK_VK_TO_VSC = 0;
@@ -255,6 +256,19 @@ namespace MapleStoryMacro
             if (KeyDisplayNames.TryGetValue(key, out var displayName))
                 return displayName ?? key.ToString();
             return key.ToString();
+        }
+
+        /// <summary>
+        /// 取得含修飾鍵的按鍵組合顯示名稱（例如 "Ctrl+Alt+Z"）
+        /// </summary>
+        private static string GetModifierKeyDisplayName(Keys key, Keys modifiers)
+        {
+            var parts = new List<string>();
+            if ((modifiers & Keys.Control) != 0) parts.Add("Ctrl");
+            if ((modifiers & Keys.Alt) != 0) parts.Add("Alt");
+            if ((modifiers & Keys.Shift) != 0) parts.Add("Shift");
+            parts.Add(GetKeyDisplayName(key));
+            return string.Join("+", parts);
         }
 
         public Form1()
@@ -379,6 +393,18 @@ namespace MapleStoryMacro
                         AddLog($"排程結束：已到達結束時間 {task.EndTime.Value:HH:mm:ss}");
                         BtnStopPlayback_Click(this, EventArgs.Empty);
                     }
+
+                    // 執行回程序列（在背景線程上執行，避免阻塞 UI）
+                    if (task.ReturnToTownEnabled)
+                    {
+                        var returnTask = task;
+                        Thread returnThread = new Thread(() => ExecuteReturnToTown(returnTask))
+                        {
+                            IsBackground = true
+                        };
+                        returnThread.Start();
+                    }
+
                     continue;
                 }
 
@@ -890,6 +916,7 @@ namespace MapleStoryMacro
                         {
                             SlotNumber = customKeySlots[i].SlotNumber,
                             KeyCode = (int)customKeySlots[i].KeyCode,
+                            Modifiers = (int)customKeySlots[i].Modifiers,
                             IntervalSeconds = customKeySlots[i].IntervalSeconds,
                             Enabled = customKeySlots[i].Enabled,
                             StartAtSecond = customKeySlots[i].StartAtSecond,
@@ -972,6 +999,7 @@ namespace MapleStoryMacro
                             {
                                 customKeySlots[i].SlotNumber = data.SlotNumber;
                                 customKeySlots[i].KeyCode = (Keys)data.KeyCode;
+                                customKeySlots[i].Modifiers = (Keys)data.Modifiers;
                                 customKeySlots[i].IntervalSeconds = data.IntervalSeconds;
                                 customKeySlots[i].Enabled = data.Enabled;
                                 customKeySlots[i].StartAtSecond = data.StartAtSecond;
@@ -1084,6 +1112,16 @@ namespace MapleStoryMacro
             eventViewer.ShowDialog();
         }
 
+        /// <summary>
+        /// 格式化時間間隔為可讀字串
+        /// </summary>
+        private static string FormatDelta(double deltaSeconds)
+        {
+            if (deltaSeconds >= 1.0)
+                return $"{deltaSeconds:F2} 秒";
+            return $"{deltaSeconds * 1000:F0} ms";
+        }
+
         private void BtnEditEvents_Click(object? sender, EventArgs e)
         {
             if (recordedEvents.Count == 0)
@@ -1094,14 +1132,11 @@ namespace MapleStoryMacro
 
             AddLog("正在開啟編輯器...");
 
-            // 整合重複按鍵事件
-            var consolidatedEvents = ConsolidateKeyEvents(recordedEvents);
-
             Form editorForm = new Form
             {
-                Text = $"編輯腳本 (整合後: {consolidatedEvents.Count} 個動作)",
-                Width = 850,
-                Height = 600,
+                Text = $"編輯腳本 ({recordedEvents.Count} 個事件)",
+                Width = 900,
+                Height = 620,
                 StartPosition = FormStartPosition.CenterParent,
                 Owner = this
             };
@@ -1109,165 +1144,408 @@ namespace MapleStoryMacro
             // 提示標籤
             Label hintLabel = new Label
             {
-                Text = "★ 選中列後按下按鍵可更改按鍵 | 支援延伸鍵 (End, PageUp 等)",
+                Text = "★ 雙擊折疊/展開同類事件 | 選中「按鍵」欄後按鍵更改 | F2 編輯間隔",
                 Top = 10,
                 Left = 10,
-                Width = 600,
+                Width = 860,
                 ForeColor = Color.Blue
             };
 
             // 標記是否有未儲存的變更
             bool hasUnsavedChanges = false;
 
+            // 建立事件的編輯副本
+            var editEvents = recordedEvents.Select(ev => new MacroEvent
+            {
+                KeyCode = ev.KeyCode,
+                EventType = ev.EventType,
+                Timestamp = ev.Timestamp
+            }).ToList();
+
+            // ===== 分組邏輯：連續相同按鍵+相同類型歸為一組 =====
+            // groupStarts[i] = 第 i 組在 editEvents 中的起始索引
+            // groupCounts[i] = 第 i 組的事件數量
+            var groupStarts = new List<int>();
+            var groupCounts = new List<int>();
+            var expandedGroups = new HashSet<int>(); // 已展開的組別索引
+
+            Action rebuildGroups = () =>
+            {
+                groupStarts.Clear();
+                groupCounts.Clear();
+                expandedGroups.Clear();
+                int i = 0;
+                while (i < editEvents.Count)
+                {
+                    int start = i;
+                    var key = editEvents[i].KeyCode;
+                    var type = editEvents[i].EventType;
+                    while (i < editEvents.Count && editEvents[i].KeyCode == key && editEvents[i].EventType == type)
+                        i++;
+                    groupStarts.Add(start);
+                    groupCounts.Add(i - start);
+                }
+            };
+            rebuildGroups();
+
             DataGridView dgv = new DataGridView
             {
                 Top = 35,
                 Left = 10,
-                Width = 810,
-                Height = 455,
+                Width = 860,
+                Height = 470,
                 AllowUserToAddRows = false,
-                AllowUserToDeleteRows = true,
+                AllowUserToDeleteRows = false,
                 AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
                 SelectionMode = DataGridViewSelectionMode.FullRowSelect,
-                ReadOnly = true
+                EditMode = DataGridViewEditMode.EditOnF2
             };
 
-            dgv.Columns.Add("KeyCode", "按鍵 (選中後按鍵更改)");
-            dgv.Columns.Add("Duration", "持續時間");
-            dgv.Columns.Add("StartTime", "開始時間 (秒)");
-            dgv.Columns.Add("EndTime", "結束時間 (秒)");
-
-            foreach (var evt in consolidatedEvents)
+            dgv.Columns.AddRange(new DataGridViewColumn[]
             {
-                string keyName = GetKeyDisplayName(evt.KeyCode);
-                string duration = evt.Duration >= 1.0
-                    ? $"{evt.Duration:F2} 秒"
-                    : $"{(evt.Duration * 1000):F0} ms";
-                int rowIdx = dgv.Rows.Add(keyName, duration, evt.StartTime.ToString("F3"), evt.EndTime.ToString("F3"));
-                // 儲存原始 KeyCode 到 Row Tag
-                dgv.Rows[rowIdx].Tag = evt.KeyCode;
-            }
+                new DataGridViewTextBoxColumn
+                {
+                    Name = "Index", HeaderText = "#", ReadOnly = true, FillWeight = 8
+                },
+                new DataGridViewTextBoxColumn
+                {
+                    Name = "KeyCode", HeaderText = "按鍵 (選中後按鍵更改)", ReadOnly = true, FillWeight = 28
+                },
+                new DataGridViewTextBoxColumn
+                {
+                    Name = "EventType", HeaderText = "類型", ReadOnly = true, FillWeight = 12
+                },
+                new DataGridViewTextBoxColumn
+                {
+                    Name = "Timestamp", HeaderText = "間隔 (秒)", FillWeight = 25,
+                    DefaultCellStyle = new DataGridViewCellStyle { BackColor = Color.FromArgb(240, 248, 255) }
+                },
+                new DataGridViewTextBoxColumn
+                {
+                    Name = "Count", HeaderText = "數量", ReadOnly = true, FillWeight = 8,
+                    DefaultCellStyle = new DataGridViewCellStyle
+                    {
+                        ForeColor = Color.DarkBlue,
+                        Alignment = DataGridViewContentAlignment.MiddleCenter
+                    }
+                }
+            });
 
-            // 攔截延伸鍵（End, PageUp, PageDown, 方向鍵等），讓它們不被 DGV 導航消耗
+            // Row.Tag 格式：int[] { groupIdx, eventIdx }
+            //   eventIdx == -1 表示折疊的群組標題列
+            //   eventIdx >= 0 表示 editEvents 中的實際索引
+
+            // 刷新所有列（根據分組與展開狀態）
+            Action refreshRows = () =>
+            {
+                dgv.SuspendLayout();
+                dgv.Rows.Clear();
+
+                for (int gi = 0; gi < groupStarts.Count; gi++)
+                {
+                    int start = groupStarts[gi];
+                    int count = groupCounts[gi];
+                    bool isSingle = count == 1;
+                    bool isExpanded = expandedGroups.Contains(gi);
+
+                    if (isSingle)
+                    {
+                        // 單一事件：直接顯示（間隔 = 與前一事件的時間差）
+                        var evt = editEvents[start];
+                        string keyName = GetKeyDisplayName(evt.KeyCode);
+                        string eventType = evt.EventType == "down" ? "▼ 按下" : "▲ 放開";
+                        double evtDelta = start == 0 ? evt.Timestamp : evt.Timestamp - editEvents[start - 1].Timestamp;
+
+                        int ri = dgv.Rows.Add((start + 1).ToString(), keyName, eventType, evtDelta.ToString("F3"), "");
+                        dgv.Rows[ri].Tag = new int[] { gi, start };
+                        dgv.Rows[ri].Cells["Timestamp"].ReadOnly = false;
+
+                        if (evt.EventType == "up")
+                            dgv.Rows[ri].DefaultCellStyle.BackColor = Color.FromArgb(255, 250, 243);
+                    }
+                    else if (isExpanded)
+                    {
+                        // 展開的群組：顯示標題列 + 所有子事件
+                        var firstEvt = editEvents[start];
+                        string headerKey = $"▾ {GetKeyDisplayName(firstEvt.KeyCode)}";
+                        string headerType = firstEvt.EventType == "down" ? "▼ 按下" : "▲ 放開";
+
+                        // 標題列顯示所有子事件間隔的總和
+                        double groupTotal = 0;
+                        for (int j = 0; j < count; j++)
+                        {
+                            int ei2 = start + j;
+                            groupTotal += ei2 == 0 ? editEvents[ei2].Timestamp : editEvents[ei2].Timestamp - editEvents[ei2 - 1].Timestamp;
+                        }
+
+                        int hri = dgv.Rows.Add("", headerKey, headerType, groupTotal.ToString("F3"), $"×{count}");
+                        dgv.Rows[hri].Tag = new int[] { gi, -1 };
+                        dgv.Rows[hri].Cells["Timestamp"].ReadOnly = true;
+                        dgv.Rows[hri].DefaultCellStyle.BackColor = firstEvt.EventType == "down"
+                            ? Color.FromArgb(218, 230, 248) : Color.FromArgb(248, 232, 218);
+                        dgv.Rows[hri].DefaultCellStyle.Font = new Font(dgv.Font, FontStyle.Bold);
+
+                        // 子事件列
+                        for (int j = 0; j < count; j++)
+                        {
+                            int ei = start + j;
+                            var evt = editEvents[ei];
+                            string childKey = $"    {GetKeyDisplayName(evt.KeyCode)}";
+                            string childType = evt.EventType == "down" ? "▼ 按下" : "▲ 放開";
+                            double childDelta = ei == 0 ? evt.Timestamp : evt.Timestamp - editEvents[ei - 1].Timestamp;
+
+                            int cri = dgv.Rows.Add((ei + 1).ToString(), childKey, childType, childDelta.ToString("F3"), "");
+                            dgv.Rows[cri].Tag = new int[] { gi, ei };
+                            dgv.Rows[cri].Cells["Timestamp"].ReadOnly = false;
+
+                            if (evt.EventType == "up")
+                                dgv.Rows[cri].DefaultCellStyle.BackColor = Color.FromArgb(255, 250, 243);
+                        }
+                    }
+                    else
+                    {
+                        // 折疊的群組：只顯示標題列（間隔 = 所有子事件間隔的總和）
+                        var firstEvt = editEvents[start];
+                        string headerKey = $"▸ {GetKeyDisplayName(firstEvt.KeyCode)}";
+                        string headerType = firstEvt.EventType == "down" ? "▼ 按下" : "▲ 放開";
+
+                        double groupTotal = 0;
+                        for (int j = 0; j < count; j++)
+                        {
+                            int ei = start + j;
+                            groupTotal += ei == 0 ? editEvents[ei].Timestamp : editEvents[ei].Timestamp - editEvents[ei - 1].Timestamp;
+                        }
+
+                        int ri = dgv.Rows.Add("", headerKey, headerType, groupTotal.ToString("F3"), $"×{count}");
+                        dgv.Rows[ri].Tag = new int[] { gi, -1 };
+                        dgv.Rows[ri].Cells["Timestamp"].ReadOnly = true;
+                        dgv.Rows[ri].DefaultCellStyle.BackColor = firstEvt.EventType == "down"
+                            ? Color.FromArgb(225, 235, 250) : Color.FromArgb(250, 238, 225);
+                        dgv.Rows[ri].DefaultCellStyle.Font = new Font(dgv.Font, FontStyle.Bold);
+                    }
+                }
+
+                dgv.ResumeLayout();
+            };
+            refreshRows();
+
+            // 雙擊切換折疊/展開
+            dgv.CellDoubleClick += (s, args) =>
+            {
+                if (args.RowIndex < 0 || args.RowIndex >= dgv.Rows.Count) return;
+                // 雙擊時間欄位時不切換（讓使用者編輯）
+                if (args.ColumnIndex == dgv.Columns["Timestamp"]!.Index) return;
+
+                if (dgv.Rows[args.RowIndex].Tag is int[] tag && tag.Length == 2)
+                {
+                    int gi = tag[0];
+                    if (gi < groupStarts.Count && groupCounts[gi] > 1)
+                    {
+                        if (expandedGroups.Contains(gi))
+                            expandedGroups.Remove(gi);
+                        else
+                            expandedGroups.Add(gi);
+                        refreshRows();
+                    }
+                }
+            };
+
+            // 攔截延伸鍵（方向鍵等），讓按鍵欄能捕獲
             dgv.PreviewKeyDown += (s, args) =>
             {
-                args.IsInputKey = true;
+                if (dgv.CurrentCell?.ColumnIndex == dgv.Columns["KeyCode"]!.Index)
+                {
+                    args.IsInputKey = true;
+                }
             };
 
-            // 按鍵感應：選中列後按下按鍵即可更改
+            // 按鍵感應：選中按鍵欄後按下按鍵即可更改
             dgv.KeyDown += (s, args) =>
             {
-                if (dgv.SelectedRows.Count == 0) return;
-
-                // 忽略修飾鍵和 Delete（Delete 保留給刪除功能）
-                if (args.KeyCode == Keys.Delete || args.KeyCode == Keys.ControlKey ||
-                    args.KeyCode == Keys.ShiftKey || args.KeyCode == Keys.Menu)
+                if (dgv.CurrentCell?.ColumnIndex != dgv.Columns["KeyCode"]!.Index)
                     return;
+                if (dgv.SelectedRows.Count == 0) return;
 
                 args.Handled = true;
                 args.SuppressKeyPress = true;
 
                 Keys newKey = args.KeyCode;
-                string newKeyName = GetKeyDisplayName(newKey);
 
                 foreach (DataGridViewRow row in dgv.SelectedRows)
                 {
-                    int index = row.Index;
-                    if (index < consolidatedEvents.Count)
+                    if (row.Tag is int[] tag && tag.Length == 2)
                     {
-                        Keys oldKey = consolidatedEvents[index].KeyCode;
-                        if (oldKey != newKey)
+                        int gi = tag[0], ei = tag[1];
+                        if (ei == -1)
                         {
-                            consolidatedEvents[index].KeyCode = newKey;
-                            row.Cells["KeyCode"].Value = newKeyName;
-                            row.Tag = newKey;
-                            hasUnsavedChanges = true;
+                            // 群組標題：更改整組所有事件
+                            int gStart = groupStarts[gi];
+                            int gCount = groupCounts[gi];
+                            for (int j = 0; j < gCount; j++)
+                                editEvents[gStart + j].KeyCode = newKey;
                         }
+                        else
+                        {
+                            // 單一事件
+                            editEvents[ei].KeyCode = newKey;
+                        }
+                        hasUnsavedChanges = true;
+                    }
+                }
+
+                // 按鍵可能改變分組結構，重建
+                rebuildGroups();
+                refreshRows();
+            };
+
+            // 驗證時間欄位
+            dgv.CellValidating += (s, args) =>
+            {
+                if (dgv.Columns[args.ColumnIndex].Name != "Timestamp") return;
+                if (dgv.Rows[args.RowIndex].Cells["Timestamp"].ReadOnly) return;
+
+                string value = args.FormattedValue?.ToString() ?? "";
+                if (!string.IsNullOrEmpty(value) && !double.TryParse(value, out _))
+                {
+                    args.Cancel = true;
+                    dgv.CancelEdit();
+                    MessageBox.Show("請輸入有效的數字！", "輸入錯誤", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+                else if (double.TryParse(value, out double ts) && ts < 0)
+                {
+                    args.Cancel = true;
+                    dgv.CancelEdit();
+                    MessageBox.Show("間隔不能為負數！", "輸入錯誤", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            };
+
+            // 時間修改後更新
+            dgv.CellValueChanged += (s, args) =>
+            {
+                if (args.RowIndex < 0 || args.RowIndex >= dgv.Rows.Count) return;
+                if (dgv.Columns[args.ColumnIndex].Name != "Timestamp") return;
+
+                if (dgv.Rows[args.RowIndex].Tag is int[] tag && tag.Length == 2 && tag[1] >= 0)
+                {
+                    int ei = tag[1];
+                    string value = dgv.Rows[args.RowIndex].Cells["Timestamp"].Value?.ToString() ?? "0";
+                    if (double.TryParse(value, out double newDelta) && ei < editEvents.Count)
+                    {
+                        // 使用者輸入的是間隔（delta），轉換回絕對時間戳
+                        double prevTs = ei == 0 ? 0 : editEvents[ei - 1].Timestamp;
+                        editEvents[ei].Timestamp = prevTs + newDelta;
+                        hasUnsavedChanges = true;
+
+                        // 更新後續事件的絕對時間戳（保持原始間隔不變）
+                        for (int subsequent = ei + 1; subsequent < editEvents.Count; subsequent++)
+                        {
+                            // 後續事件不需要調整，因為它們的絕對時間戳是獨立的
+                            // 只有當前事件的絕對時間改變
+                            break;
+                        }
+
+                        refreshRows();
                     }
                 }
             };
 
             Panel btnPanel = new Panel
             {
-                Top = 500,
+                Top = 515,
                 Left = 10,
-                Width = 810,
+                Width = 860,
                 Height = 50,
                 BorderStyle = BorderStyle.FixedSingle
             };
 
             Button deleteBtn = new Button { Text = "刪除選中", Width = 100, Height = 30, Left = 10, Top = 10 };
+            Button expandAllBtn = new Button { Text = "全部展開", Width = 85, Height = 30, Left = 340, Top = 10 };
+            Button collapseAllBtn = new Button { Text = "全部折疊", Width = 85, Height = 30, Left = 430, Top = 10 };
             Button saveBtn = new Button { Text = "💾 儲存", Width = 100, Height = 30, Left = 120, Top = 10, ForeColor = Color.Green };
             Button closeBtn = new Button { Text = "關閉", Width = 100, Height = 30, Left = 230, Top = 10 };
 
             Label infoLabel = new Label
             {
-                Text = $"原始事件: {recordedEvents.Count} | 整合後: {consolidatedEvents.Count}",
-                Left = 350,
+                Text = $"事件: {editEvents.Count} | 群組: {groupStarts.Count}",
+                Left = 530,
                 Top = 15,
-                Width = 300,
+                Width = 320,
                 ForeColor = Color.Gray
+            };
+
+            expandAllBtn.Click += (s, args) =>
+            {
+                for (int gi = 0; gi < groupStarts.Count; gi++)
+                {
+                    if (groupCounts[gi] > 1)
+                        expandedGroups.Add(gi);
+                }
+                refreshRows();
+            };
+
+            collapseAllBtn.Click += (s, args) =>
+            {
+                expandedGroups.Clear();
+                refreshRows();
             };
 
             deleteBtn.Click += (s, args) =>
             {
-                if (dgv.SelectedRows.Count > 0)
-                {
-                    var selectedIndices = dgv.SelectedRows.Cast<DataGridViewRow>()
-                        .Select(r => r.Index)
-                        .OrderByDescending(i => i)
-                        .ToList();
+                if (dgv.SelectedRows.Count == 0) return;
 
-                    foreach (int index in selectedIndices)
+                var indicesToRemove = new HashSet<int>();
+                foreach (DataGridViewRow row in dgv.SelectedRows)
+                {
+                    if (row.Tag is int[] tag && tag.Length == 2)
                     {
-                        if (index < consolidatedEvents.Count)
+                        int gi = tag[0], ei = tag[1];
+                        if (ei == -1)
                         {
-                            var evtToRemove = consolidatedEvents[index];
-                            // 從原始事件中移除對應的事件（使用 OriginalKeyCode 以正確匹配）
-                            recordedEvents.RemoveAll(e =>
-                                e.KeyCode == evtToRemove.OriginalKeyCode &&
-                                e.Timestamp >= evtToRemove.StartTime &&
-                                e.Timestamp <= evtToRemove.EndTime);
-                            consolidatedEvents.RemoveAt(index);
-                            dgv.Rows.RemoveAt(index);
+                            // 群組標題：刪除整組
+                            int gStart = groupStarts[gi];
+                            int gCount = groupCounts[gi];
+                            for (int j = 0; j < gCount; j++)
+                                indicesToRemove.Add(gStart + j);
+                        }
+                        else
+                        {
+                            indicesToRemove.Add(ei);
                         }
                     }
-                    hasUnsavedChanges = true;
-                    lblRecordingStatus.Text = $"已編輯 | 事件數: {recordedEvents.Count}";
-                    infoLabel.Text = $"原始事件: {recordedEvents.Count} | 整合後: {consolidatedEvents.Count}";
-                    AddLog($"✅ 已刪除 {selectedIndices.Count} 個動作");
                 }
+
+                if (indicesToRemove.Count == 0) return;
+
+                // 從後往前刪除
+                foreach (int idx in indicesToRemove.OrderByDescending(x => x))
+                {
+                    editEvents.RemoveAt(idx);
+                }
+
+                hasUnsavedChanges = true;
+                rebuildGroups();
+                refreshRows();
+                infoLabel.Text = $"事件: {editEvents.Count} | 群組: {groupStarts.Count}";
+                AddLog($"✅ 已刪除 {indicesToRemove.Count} 個事件");
             };
 
             saveBtn.Click += (s, args) =>
             {
-                // 將整合事件的按鍵更改套用回原始事件
-                int changedCount = 0;
-                foreach (var consolidated in consolidatedEvents)
+                recordedEvents.Clear();
+                recordedEvents.AddRange(editEvents.Select(ev => new MacroEvent
                 {
-                    if (consolidated.KeyCode == consolidated.OriginalKeyCode)
-                        continue; // 未更改，跳過
+                    KeyCode = ev.KeyCode,
+                    EventType = ev.EventType,
+                    Timestamp = ev.Timestamp
+                }));
 
-                    // 找出時間範圍內、且匹配原始按鍵的事件
-                    foreach (var evt in recordedEvents)
-                    {
-                        if (evt.Timestamp >= consolidated.StartTime &&
-                            evt.Timestamp <= consolidated.EndTime &&
-                            evt.KeyCode == consolidated.OriginalKeyCode)
-                        {
-                            evt.KeyCode = consolidated.KeyCode;
-                            changedCount++;
-                        }
-                    }
-                    // 更新 OriginalKeyCode 以反映已儲存的狀態
-                    consolidated.OriginalKeyCode = consolidated.KeyCode;
-                }
+                recordedEvents.Sort((a, b) => a.Timestamp.CompareTo(b.Timestamp));
 
                 hasUnsavedChanges = false;
                 lblRecordingStatus.Text = $"已編輯 | 事件數: {recordedEvents.Count}";
-                infoLabel.Text = $"原始事件: {recordedEvents.Count} | 整合後: {consolidatedEvents.Count}";
-                AddLog($"✅ 已儲存編輯 (更改了 {changedCount} 個原始事件)");
-                MessageBox.Show($"已儲存！更改了 {changedCount} 個原始事件。", "儲存成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                infoLabel.Text = $"事件: {editEvents.Count} | 群組: {groupStarts.Count}";
+                AddLog($"✅ 已儲存編輯 ({recordedEvents.Count} 個事件)");
+                MessageBox.Show($"已儲存！共 {recordedEvents.Count} 個事件。", "儲存成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
             };
 
             closeBtn.Click += (s, args) =>
@@ -1285,7 +1563,6 @@ namespace MapleStoryMacro
                     {
                         editorForm.Close();
                     }
-                    // Cancel: 不關閉
                 }
                 else
                 {
@@ -1296,6 +1573,8 @@ namespace MapleStoryMacro
             btnPanel.Controls.Add(deleteBtn);
             btnPanel.Controls.Add(saveBtn);
             btnPanel.Controls.Add(closeBtn);
+            btnPanel.Controls.Add(expandAllBtn);
+            btnPanel.Controls.Add(collapseAllBtn);
             btnPanel.Controls.Add(infoLabel);
 
             editorForm.Controls.Add(hintLabel);
@@ -1313,6 +1592,8 @@ namespace MapleStoryMacro
         {
             public Keys KeyCode { get; set; }
             public Keys OriginalKeyCode { get; set; }
+            public Keys Modifiers { get; set; }
+            public Keys OriginalModifiers { get; set; }
             public double StartTime { get; set; }
             public double EndTime { get; set; }
             public double Duration => EndTime - StartTime;
@@ -1321,6 +1602,30 @@ namespace MapleStoryMacro
         /// <summary>
         /// 將連續重複的按鍵事件整合為單一動作
         /// </summary>
+        /// <summary>
+        /// 檢查按鍵是否為修飾鍵（Ctrl/Alt/Shift）
+        /// </summary>
+        private static bool IsModifierKey(Keys key)
+        {
+            return key == Keys.ControlKey || key == Keys.LControlKey || key == Keys.RControlKey ||
+                   key == Keys.ShiftKey || key == Keys.LShiftKey || key == Keys.RShiftKey ||
+                   key == Keys.Menu || key == Keys.LMenu || key == Keys.RMenu;
+        }
+
+        /// <summary>
+        /// 將具體的修飾鍵碼轉換為 Keys 修飾旗標
+        /// </summary>
+        private static Keys ModifierKeyToFlag(Keys key)
+        {
+            return key switch
+            {
+                Keys.ControlKey or Keys.LControlKey or Keys.RControlKey => Keys.Control,
+                Keys.ShiftKey or Keys.LShiftKey or Keys.RShiftKey => Keys.Shift,
+                Keys.Menu or Keys.LMenu or Keys.RMenu => Keys.Alt,
+                _ => Keys.None
+            };
+        }
+
         private List<ConsolidatedKeyEvent> ConsolidateKeyEvents(List<MacroEvent> events)
         {
             var consolidated = new List<ConsolidatedKeyEvent>();
@@ -1329,10 +1634,20 @@ namespace MapleStoryMacro
             // 追蹤每個按鍵的按下時間
             var keyDownTimes = new Dictionary<Keys, double>();
 
+            // 追蹤目前按住的修飾鍵及其按下時間
+            var activeModifiers = new Dictionary<Keys, double>();
+
             foreach (var evt in events.OrderBy(e => e.Timestamp))
             {
                 if (evt.EventType == "down")
                 {
+                    if (IsModifierKey(evt.KeyCode))
+                    {
+                        // 記錄修飾鍵按下
+                        if (!activeModifiers.ContainsKey(evt.KeyCode))
+                            activeModifiers[evt.KeyCode] = evt.Timestamp;
+                    }
+
                     // 記錄按下時間（如果尚未追蹤）
                     if (!keyDownTimes.ContainsKey(evt.KeyCode))
                     {
@@ -1341,16 +1656,37 @@ namespace MapleStoryMacro
                 }
                 else if (evt.EventType == "up")
                 {
+                    if (IsModifierKey(evt.KeyCode))
+                    {
+                        activeModifiers.Remove(evt.KeyCode);
+                    }
+
                     // 放開時計算持續時間
                     if (keyDownTimes.TryGetValue(evt.KeyCode, out double startTime))
                     {
-                        consolidated.Add(new ConsolidatedKeyEvent
+                        // 計算此按鍵按下期間有哪些修飾鍵是按住的
+                        Keys modifiers = Keys.None;
+                        if (!IsModifierKey(evt.KeyCode))
+                        {
+                            foreach (var mod in activeModifiers)
                             {
-                                KeyCode = evt.KeyCode,
-                                OriginalKeyCode = evt.KeyCode,
-                                StartTime = startTime,
-                                EndTime = evt.Timestamp
-                            });
+                                // 修飾鍵必須在主鍵按下之前或同時按下
+                                if (mod.Value <= startTime)
+                                {
+                                    modifiers |= ModifierKeyToFlag(mod.Key);
+                                }
+                            }
+                        }
+
+                        consolidated.Add(new ConsolidatedKeyEvent
+                        {
+                            KeyCode = evt.KeyCode,
+                            OriginalKeyCode = evt.KeyCode,
+                            Modifiers = modifiers,
+                            OriginalModifiers = modifiers,
+                            StartTime = startTime,
+                            EndTime = evt.Timestamp
+                        });
                         keyDownTimes.Remove(evt.KeyCode);
                     }
                 }
@@ -1359,15 +1695,29 @@ namespace MapleStoryMacro
             // 處理未放開的按鍵
             foreach (var kvp in keyDownTimes)
             {
+                Keys modifiers = Keys.None;
+                if (!IsModifierKey(kvp.Key))
+                {
+                    foreach (var mod in activeModifiers)
+                    {
+                        if (mod.Value <= kvp.Value)
+                            modifiers |= ModifierKeyToFlag(mod.Key);
+                    }
+                }
+
                 consolidated.Add(new ConsolidatedKeyEvent
                 {
                     KeyCode = kvp.Key,
                     OriginalKeyCode = kvp.Key,
+                    Modifiers = modifiers,
+                    OriginalModifiers = modifiers,
                     StartTime = kvp.Value,
                     EndTime = events.Max(e => e.Timestamp)
                 });
             }
 
+            // 過濾掉純修飾鍵事件（它們已經被合併到主鍵的 Modifiers 中）
+            // 但保留獨立的修飾鍵（沒有搭配主鍵的）
             return consolidated.OrderBy(e => e.StartTime).ToList();
         }
 
@@ -1640,7 +1990,7 @@ namespace MapleStoryMacro
                     }
 
                     // 2. 發送按鍵（按下和放開）
-                    SendCustomKey(slot.KeyCode);
+                    SendCustomKey(slot.KeyCode, slot.Modifiers);
 
                     this.BeginInvoke(new Action(() =>
                     {
@@ -1664,25 +2014,25 @@ namespace MapleStoryMacro
         }
 
         /// <summary>
-        /// 發送自定義按鍵（按下後立即放開）
+        /// 發送自定義按鍵（按下後立即放開，單鍵）
         /// </summary>
-        private void SendCustomKey(Keys key)
+        private void SendCustomKey(Keys key, Keys modifiers = Keys.None)
         {
             try
             {
                 if (targetWindowHandle != IntPtr.Zero && IsWindow(targetWindowHandle))
                 {
-                    // 背景模式：統一走 SendKeyWithThreadAttach
-                    SendKeyWithThreadAttach(targetWindowHandle, key, true);   // 按下
+                    // 背景模式
+                    SendKeyWithThreadAttach(targetWindowHandle, key, true);
                     Thread.Sleep(30);
-                    SendKeyWithThreadAttach(targetWindowHandle, key, false);  // 放開
+                    SendKeyWithThreadAttach(targetWindowHandle, key, false);
                 }
                 else
                 {
                     // 前景模式
-                    SendKeyForeground(key, true);  // 按下
+                    SendKeyForeground(key, true);
                     Thread.Sleep(30);
-                    SendKeyForeground(key, false); // 放開
+                    SendKeyForeground(key, false);
                 }
             }
             catch (Exception ex)
@@ -2143,6 +2493,122 @@ namespace MapleStoryMacro
             }
         }
 
+        /// <summary>
+        /// 發送文字到背景視窗（使用 WM_CHAR 逐字發送）
+        /// </summary>
+        private void SendTextToWindow(IntPtr hWnd, string text)
+        {
+            foreach (char c in text)
+            {
+                PostMessage(hWnd, WM_CHAR, (IntPtr)c, IntPtr.Zero);
+                Thread.Sleep(30);
+            }
+        }
+
+        /// <summary>
+        /// 發送文字到前景（使用 SendInput 逐字發送）
+        /// </summary>
+        private void SendTextForeground(string text)
+        {
+            foreach (char c in text)
+            {
+                INPUT[] inputs = new INPUT[2];
+
+                // Key down (UNICODE)
+                inputs[0].type = INPUT_KEYBOARD;
+                inputs[0].u.ki.wVk = 0;
+                inputs[0].u.ki.wScan = (ushort)c;
+                inputs[0].u.ki.dwFlags = 0x0004; // KEYEVENTF_UNICODE
+                inputs[0].u.ki.time = 0;
+                inputs[0].u.ki.dwExtraInfo = IntPtr.Zero;
+
+                // Key up (UNICODE)
+                inputs[1].type = INPUT_KEYBOARD;
+                inputs[1].u.ki.wVk = 0;
+                inputs[1].u.ki.wScan = (ushort)c;
+                inputs[1].u.ki.dwFlags = 0x0004 | KEYEVENTF_KEYUP;
+                inputs[1].u.ki.time = 0;
+                inputs[1].u.ki.dwExtraInfo = IntPtr.Zero;
+
+                SendInput(2, inputs, Marshal.SizeOf(typeof(INPUT)));
+                Thread.Sleep(30);
+            }
+        }
+
+        /// <summary>
+        /// 執行回程序列：Enter → 輸入指令 → Enter → 等待 → 坐下按鍵
+        /// </summary>
+        private void ExecuteReturnToTown(ScheduleTask task)
+        {
+            try
+            {
+                this.BeginInvoke(new Action(() => AddLog($"🏠 開始回程序列：{task.ReturnCommand}")));
+
+                bool isBackground = targetWindowHandle != IntPtr.Zero && IsWindow(targetWindowHandle);
+
+                // 1. 按下 Enter（開啟對話框）
+                if (isBackground)
+                {
+                    SendKeyToWindow(targetWindowHandle, Keys.Enter, true);
+                    Thread.Sleep(30);
+                    SendKeyToWindow(targetWindowHandle, Keys.Enter, false);
+                }
+                else
+                {
+                    SendKeyForeground(Keys.Enter, true);
+                    Thread.Sleep(30);
+                    SendKeyForeground(Keys.Enter, false);
+                }
+                Thread.Sleep(300);
+
+                // 2. 輸入回程指令（例如 @FM）
+                if (isBackground)
+                {
+                    SendTextToWindow(targetWindowHandle, task.ReturnCommand);
+                }
+                else
+                {
+                    SendTextForeground(task.ReturnCommand);
+                }
+                Thread.Sleep(200);
+
+                // 3. 按下 Enter（送出指令）
+                if (isBackground)
+                {
+                    SendKeyToWindow(targetWindowHandle, Keys.Enter, true);
+                    Thread.Sleep(30);
+                    SendKeyToWindow(targetWindowHandle, Keys.Enter, false);
+                }
+                else
+                {
+                    SendKeyForeground(Keys.Enter, true);
+                    Thread.Sleep(30);
+                    SendKeyForeground(Keys.Enter, false);
+                }
+
+                this.BeginInvoke(new Action(() => AddLog($"📨 已送出指令：{task.ReturnCommand}")));
+
+                // 4. 等待傳送完成
+                Keys sitKey = (Keys)task.SitDownKeyCode;
+                if (sitKey != Keys.None)
+                {
+                    int delayMs = (int)(task.SitDownDelaySeconds * 1000);
+                    this.BeginInvoke(new Action(() => AddLog($"⏳ 等待 {task.SitDownDelaySeconds} 秒後坐下...")));
+                    Thread.Sleep(delayMs);
+
+                    // 5. 按下坐下按鍵
+                    SendCustomKey(sitKey);
+                    this.BeginInvoke(new Action(() => AddLog($"🪑 已坐下：{GetKeyDisplayName(sitKey)}")));
+                }
+
+                this.BeginInvoke(new Action(() => AddLog($"✅ 回程序列完成")));
+            }
+            catch (Exception ex)
+            {
+                this.BeginInvoke(new Action(() => AddLog($"❌ 回程序列失敗: {ex.Message}")));
+            }
+        }
+
         private void BtnStopPlayback_Click(object? sender, EventArgs e)
         {
             if (isPlaying)
@@ -2482,12 +2948,13 @@ namespace MapleStoryMacro
                 Width = 45
             };
 
-            // 按鍵 - 使用 TextBox，但透過事件處理按鍵輸入
+            // 按鍵 - ReadOnly，透過 DGV 層級的 KeyDown 捕獲按鍵（避免 EditingControlWantsInputKey 攔截導航鍵）
             var colKey = new DataGridViewTextBoxColumn
             {
                 Name = "KeyCode",
-                HeaderText = "按鍵 (點擊後按鍵)",
+                HeaderText = "按鍵 (選中後按鍵)",
                 Width = 120,
+                ReadOnly = true,
                 DefaultCellStyle = new DataGridViewCellStyle { BackColor = Color.FromArgb(50, 60, 70), ForeColor = Color.LightGreen }
             };
 
@@ -2552,26 +3019,33 @@ namespace MapleStoryMacro
                     slot.PauseScriptSeconds.ToString("F1"),
                     slot.PreDelaySeconds.ToString("F1")
                 );
-                // 儲存 KeyCode 到 Tag
                 dgv.Rows[i].Cells["KeyCode"].Tag = slot.KeyCode;
             }
 
-            // 處理按鍵欄位的按鍵輸入
-            dgv.EditingControlShowing += (s, args) =>
+            // 攔截所有按鍵（包括 Home, End, Delete, Insert, PageUp, PageDown 等導航鍵）
+            dgv.PreviewKeyDown += (s, args) =>
             {
-                if (args.Control is TextBox tb)
+                if (dgv.CurrentCell?.ColumnIndex == dgv.Columns["KeyCode"].Index)
                 {
-                    // 先無條件移除舊的處理器（避免殘留到其他欄位）
-                    tb.KeyDown -= CustomKeyCell_KeyDown;
-                    tb.PreviewKeyDown -= CustomKeyCell_PreviewKeyDown;
-
-                    if (dgv.CurrentCell.ColumnIndex == dgv.Columns["KeyCode"].Index)
-                    {
-                        // 只在 KeyCode 欄位時附加按鍵捕獲
-                        tb.KeyDown += CustomKeyCell_KeyDown;
-                        tb.PreviewKeyDown += CustomKeyCell_PreviewKeyDown;
-                    }
+                    args.IsInputKey = true;
                 }
+            };
+
+            // DGV 層級按鍵捕獲：選中 KeyCode 欄位後直接按鍵設定（不需進入編輯模式）
+            dgv.KeyDown += (s, args) =>
+            {
+                if (dgv.CurrentCell?.ColumnIndex != dgv.Columns["KeyCode"].Index)
+                    return;
+
+                args.Handled = true;
+                args.SuppressKeyPress = true;
+
+                Keys newKey = args.KeyCode;
+                string newKeyName = GetKeyDisplayName(newKey);
+
+                int rowIndex = dgv.CurrentCell.RowIndex;
+                dgv.CurrentCell.Value = newKeyName;
+                dgv.Rows[rowIndex].Cells["KeyCode"].Tag = newKey;
             };
 
             // 驗證數字欄位 - 只允許數字和小數點
@@ -2587,15 +3061,6 @@ namespace MapleStoryMacro
                         dgv.CancelEdit();
                         MessageBox.Show("請輸入有效的數字！", "輸入錯誤", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     }
-                }
-            };
-
-            // 按鍵欄位不可直接編輯文字
-            dgv.CellBeginEdit += (s, args) =>
-            {
-                if (dgv.Columns[args.ColumnIndex].Name == "KeyCode")
-                {
-                    // 允許進入編輯模式以便捕獲按鍵
                 }
             };
 
@@ -2672,7 +3137,16 @@ namespace MapleStoryMacro
                     {
                         var row = dgv.Rows[i];
                         customKeySlots[i].Enabled = Convert.ToBoolean(row.Cells["Enabled"].Value);
-                        customKeySlots[i].KeyCode = (Keys)(row.Cells["KeyCode"].Tag ?? Keys.None);
+                        var tagValue = row.Cells["KeyCode"].Tag;
+                        if (tagValue is Keys key)
+                        {
+                            customKeySlots[i].KeyCode = key;
+                        }
+                        else
+                        {
+                            customKeySlots[i].KeyCode = Keys.None;
+                        }
+                        customKeySlots[i].Modifiers = Keys.None;
                         customKeySlots[i].IntervalSeconds = double.TryParse(row.Cells["Interval"].Value?.ToString(), out double interval) ? interval : 30;
                         customKeySlots[i].StartAtSecond = double.TryParse(row.Cells["StartAt"].Value?.ToString(), out double startAt) ? startAt : 0;
                         customKeySlots[i].PauseScriptEnabled = Convert.ToBoolean(row.Cells["PauseEnabled"].Value);
@@ -2706,7 +3180,7 @@ namespace MapleStoryMacro
         }
 
         /// <summary>
-        /// 自定義按鍵欄位的按鍵處理
+        /// 自定義按鍵欄位的按鍵處理（單鍵設定）
         /// </summary>
         private void CustomKeyCell_KeyDown(object? sender, KeyEventArgs e)
         {
@@ -2727,9 +3201,7 @@ namespace MapleStoryMacro
 
                 if (parent is DataGridView dgv && dgv.CurrentCell != null)
                 {
-                    // 儲存 KeyCode 到 Cell 的 Tag
                     dgv.CurrentCell.Tag = e.KeyCode;
-                    // 結束編輯
                     dgv.EndEdit();
                 }
             }
@@ -2744,7 +3216,7 @@ namespace MapleStoryMacro
             {
                 Text = "⏰ 排程管理",
                 Width = 650,
-                Height = 580,
+                Height = 720,
                 StartPosition = FormStartPosition.CenterParent,
                 Owner = this,
                 FormBorderStyle = FormBorderStyle.FixedDialog,
@@ -2859,11 +3331,73 @@ namespace MapleStoryMacro
                 ForeColor = Color.Gray, Font = new Font("Microsoft JhengHei UI", 8.5F)
             };
 
+            // ===== 回程設定區塊 =====
+            CheckBox chkReturnToTown = new CheckBox
+            {
+                Text = "🏠 回程（結束時自動回城）",
+                Left = 20, Top = 170, Width = 220,
+                ForeColor = Color.FromArgb(100, 220, 160),
+                Font = new Font("Microsoft JhengHei UI", 9F, FontStyle.Bold),
+                Checked = false
+            };
+
+            Label lblReturnCmd = new Label { Text = "指令：", Left = 250, Top = 172, Width = 45, ForeColor = Color.White };
+            TextBox txtReturnCmd = new TextBox
+            {
+                Left = 295, Top = 169, Width = 80,
+                BackColor = Color.FromArgb(60, 60, 65), ForeColor = Color.LightGreen,
+                Text = "@FM", Enabled = false
+            };
+
+            Label lblSitKey = new Label { Text = "坐下：", Left = 385, Top = 172, Width = 45, ForeColor = Color.White };
+            TextBox txtSitKey = new TextBox
+            {
+                Left = 430, Top = 169, Width = 100, ReadOnly = true,
+                BackColor = Color.FromArgb(60, 60, 65), ForeColor = Color.Cyan,
+                Text = "(點擊設定)", Enabled = false,
+                Tag = Keys.None
+            };
+
+            Label lblSitDelay = new Label { Text = "延遲：", Left = 20, Top = 200, Width = 45, ForeColor = Color.White };
+            NumericUpDown numSitDelay = new NumericUpDown
+            {
+                Left = 65, Top = 197, Width = 60,
+                Minimum = 0, Maximum = 30, Value = 3, DecimalPlaces = 1, Increment = 0.5m,
+                BackColor = Color.FromArgb(60, 60, 65), ForeColor = Color.White,
+                Enabled = false
+            };
+            Label lblSitDelayUnit = new Label
+            {
+                Text = "秒後坐下 | 序列：Enter → 指令 → Enter → 等待 → 坐下鍵",
+                Left = 130, Top = 200, Width = 450,
+                ForeColor = Color.Gray, Font = new Font("Microsoft JhengHei UI", 8.5F)
+            };
+
+            // 回程勾選控制啟用/停用
+            chkReturnToTown.CheckedChanged += (s, args) =>
+            {
+                bool enabled = chkReturnToTown.Checked;
+                txtReturnCmd.Enabled = enabled;
+                txtSitKey.Enabled = enabled;
+                numSitDelay.Enabled = enabled;
+            };
+
+            // 坐下按鍵捕獲（單鍵，含 Ctrl/Shift/Alt/導航鍵）
+            txtSitKey.PreviewKeyDown += (s, args) => { args.IsInputKey = true; };
+            txtSitKey.KeyDown += (s, args) =>
+            {
+                args.SuppressKeyPress = true;
+                args.Handled = true;
+
+                txtSitKey.Text = GetKeyDisplayName(args.KeyCode);
+                txtSitKey.Tag = args.KeyCode;
+            };
+
             // 新增按鈕
             Button btnAddTask = new Button
             {
                 Text = "➕ 新增排程",
-                Left = 20, Top = 170, Width = 120, Height = 30,
+                Left = 20, Top = 230, Width = 120, Height = 30,
                 BackColor = Color.FromArgb(0, 150, 80), ForeColor = Color.White, FlatStyle = FlatStyle.Flat
             };
 
@@ -2871,14 +3405,14 @@ namespace MapleStoryMacro
             Label lblListTitle = new Label
             {
                 Text = "📅 排程清單",
-                Left = 20, Top = 210, Width = 200,
+                Left = 20, Top = 270, Width = 200,
                 ForeColor = Color.Yellow,
                 Font = new Font("Microsoft JhengHei UI", 10F, FontStyle.Bold)
             };
 
             DataGridView dgv = new DataGridView
             {
-                Left = 20, Top = 235, Width = 590, Height = 220,
+                Left = 20, Top = 295, Width = 590, Height = 220,
                 BackgroundColor = Color.FromArgb(30, 30, 35),
                 ForeColor = Color.White,
                 GridColor = Color.FromArgb(60, 60, 65),
@@ -2904,13 +3438,15 @@ namespace MapleStoryMacro
             dgv.Columns.Add("StartTime", "開始時間");
             dgv.Columns.Add("EndTime", "結束時間");
             dgv.Columns.Add("Loop", "循環");
+            dgv.Columns.Add("Return", "回程");
             dgv.Columns.Add("Status", "狀態");
 
-            dgv.Columns["Script"].FillWeight = 30;
-            dgv.Columns["StartTime"].FillWeight = 25;
-            dgv.Columns["EndTime"].FillWeight = 25;
+            dgv.Columns["Script"].FillWeight = 25;
+            dgv.Columns["StartTime"].FillWeight = 20;
+            dgv.Columns["EndTime"].FillWeight = 20;
             dgv.Columns["Loop"].FillWeight = 10;
-            dgv.Columns["Status"].FillWeight = 10;
+            dgv.Columns["Return"].FillWeight = 10;
+            dgv.Columns["Status"].FillWeight = 15;
 
             Action refreshTaskList = () =>
             {
@@ -2920,7 +3456,8 @@ namespace MapleStoryMacro
                     string scriptName = string.IsNullOrEmpty(task.ScriptPath) ? "(當前腳本)" : Path.GetFileName(task.ScriptPath);
                     string endTimeStr = task.EndTime.HasValue ? task.EndTime.Value.ToString("HH:mm:ss") : "不限";
                     string status = task.HasStarted ? "已觸發" : (task.Enabled ? "等待中" : "已完成");
-                    dgv.Rows.Add(scriptName, task.StartTime.ToString("HH:mm:ss"), endTimeStr, task.LoopCount, status);
+                    string returnStr = task.ReturnToTownEnabled ? "✔" : "";
+                    dgv.Rows.Add(scriptName, task.StartTime.ToString("HH:mm:ss"), endTimeStr, task.LoopCount, returnStr, status);
                 }
             };
             refreshTaskList();
@@ -2953,36 +3490,46 @@ namespace MapleStoryMacro
                     EndTime = chkEndTime.Checked ? dtpEnd.Value : null,
                     LoopCount = (int)numLoop.Value,
                     Enabled = true,
-                    HasStarted = false
+                    HasStarted = false,
+                    ReturnToTownEnabled = chkReturnToTown.Checked,
+                    ReturnCommand = txtReturnCmd.Text.Trim(),
+                    SitDownDelaySeconds = (double)numSitDelay.Value
                 };
+
+                // 設定坐下按鍵
+                if (txtSitKey.Tag is Keys sitKey)
+                {
+                    newTask.SitDownKeyCode = (int)sitKey;
+                }
 
                 scheduleTasks.Add(newTask);
                 schedulerTimer.Start();
                 refreshTaskList();
 
                 string endInfo = chkEndTime.Checked ? $", 結束={dtpEnd.Value:HH:mm:ss}" : "";
-                AddLog($"新增排程：{(string.IsNullOrEmpty(scriptPath) ? "當前腳本" : Path.GetFileName(scriptPath))}, 開始={dtpStart.Value:HH:mm:ss}{endInfo}, 循環={numLoop.Value}");
+                string returnInfo = chkReturnToTown.Checked ? $", 回程={txtReturnCmd.Text}" : "";
+                AddLog($"新增排程：{(string.IsNullOrEmpty(scriptPath) ? "當前腳本" : Path.GetFileName(scriptPath))}, 開始={dtpStart.Value:HH:mm:ss}{endInfo}, 循環={numLoop.Value}{returnInfo}");
             };
 
             // 刪除與清空按鈕
             Button btnRemove = new Button
             {
                 Text = "🗑️ 刪除選中",
-                Left = 20, Top = 465, Width = 110, Height = 30,
+                Left = 20, Top = 525, Width = 110, Height = 30,
                 BackColor = Color.FromArgb(150, 60, 60), ForeColor = Color.White, FlatStyle = FlatStyle.Flat
             };
 
             Button btnClearAll = new Button
             {
                 Text = "清空全部",
-                Left = 140, Top = 465, Width = 90, Height = 30,
+                Left = 140, Top = 525, Width = 90, Height = 30,
                 BackColor = Color.FromArgb(120, 80, 40), ForeColor = Color.White, FlatStyle = FlatStyle.Flat
             };
 
             Button btnClose = new Button
             {
                 Text = "關閉",
-                Left = 530, Top = 465, Width = 80, Height = 30,
+                Left = 530, Top = 525, Width = 80, Height = 30,
                 BackColor = Color.FromArgb(80, 80, 85), ForeColor = Color.White, FlatStyle = FlatStyle.Flat
             };
 
@@ -3014,7 +3561,7 @@ namespace MapleStoryMacro
             // 倒數計時
             Label lblCountdown = new Label
             {
-                Left = 240, Top = 470, Width = 280,
+                Left = 240, Top = 530, Width = 280,
                 ForeColor = Color.Yellow, Font = new Font("Microsoft JhengHei UI", 9F)
             };
 
@@ -3058,6 +3605,8 @@ namespace MapleStoryMacro
                 lblScript, txtScriptPath, btnBrowse, btnUseCurrent,
                 lblStart, dtpStart, lblEnd, chkEndTime, dtpEnd,
                 lblLoop, numLoop, lblLoopHint,
+                chkReturnToTown, lblReturnCmd, txtReturnCmd, lblSitKey, txtSitKey,
+                lblSitDelay, numSitDelay, lblSitDelayUnit,
                 btnAddTask,
                 lblListTitle, dgv,
                 btnRemove, btnClearAll, btnClose, lblCountdown
