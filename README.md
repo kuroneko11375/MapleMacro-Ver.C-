@@ -11,7 +11,7 @@
 基於 C# 開發的楓之谷鍵盤自動化工具，透過 **Windows API (P/Invoke)** 實現按鍵錄製、播放與背景發送，支援前景 / 背景雙模式。
 
 ## 專案介面
-<img width="678" height="628" alt="image" src="https://github.com/user-attachments/assets/994d7641-b3c9-466a-a4cc-1b068e25d4b0" />
+<img width="670" height="646" alt="image" src="https://github.com/user-attachments/assets/a31eb1c3-d92b-4258-92e5-94b54c896ec3" />
 
 ## ⚡ 功能特色
 
