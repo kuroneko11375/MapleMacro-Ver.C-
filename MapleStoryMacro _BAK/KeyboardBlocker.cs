@@ -1,23 +1,20 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.Linq;
 using System.Runtime.InteropServices;
 
 namespace MapleStoryMacro
 {
     /// <summary>
-    /// 鍵盤阻擋器 - 使用 Low-Level Keyboard Hook 條件式攔截巨集按鍵（增強版）
+    /// 鍵盤阻擋器 - 使用 Low-Level Keyboard Hook 條件式攔截巨集按鍵
     /// 
-    /// 工作原理（條件式攔截 + 多層檢測）：
-    /// 1. Marker 檢測：檢測帶有 MACRO_KEY_MARKER 標記的按鍵 (dwExtraInfo)
-    /// 2. Injected 旗標：檢測 LLKHF_INJECTED 旗標（程式注入的按鍵）
-    /// 3. 時間戳記追蹤：100ms 內發送的按鍵序列追蹤
-    /// 4. 按鍵序列模式：追蹤按鍵組合和序列模式（如 Shift+Down → Down → Up → Shift Up）
-    /// 5. 速度檢測：檢測不合理的高速按鍵輸入
-    /// 6. 遊戲前景 → 攔截（return 1），防止重複處理
-    /// 7. 遊戲背景 → 放行（CallNextHookEx），確保 key state 更新
+    /// 工作原理（條件式攔截）：
+    /// 1. 檢測帶有 MACRO_KEY_MARKER 標記的按鍵 (dwExtraInfo)
+    /// 2. 檢測 LLKHF_INJECTED 旗標（程式注入的按鍵）
+    /// 3. 時間戳記追蹤（100ms 內發送的按鍵）
+    /// 4. 遊戲前景 → 攔截（return 1），防止重複處理
+    /// 5. 遊戲背景 → 放行（CallNextHookEx），確保 key state 更新，
+    ///    否則 GetKeyState/GetAsyncKeyState 偵測不到按鍵
     /// </summary>
     public class KeyboardBlocker : IDisposable
     {
@@ -30,15 +27,7 @@ namespace MapleStoryMacro
         
         // 時間戳記追蹤（用於輔助識別）
         private readonly ConcurrentDictionary<uint, DateTime> _pendingKeys = new();
-        private readonly TimeSpan _keyTimeout = TimeSpan.FromMilliseconds(150);  // 延長超時以覆蓋更多情況
-        
-        // 按鍵序列追蹤（新增 - 用於識別複雜的按鍵組合）
-        private readonly ConcurrentQueue<KeyEvent> _recentKeyEvents = new();
-        private readonly TimeSpan _sequenceWindow = TimeSpan.FromMilliseconds(500);
-        
-        // 速度檢測（新增 - 檢測不合理的高速輸入）
-        private readonly ConcurrentDictionary<uint, DateTime> _lastKeyTime = new();
-        private const double MIN_KEY_INTERVAL_MS = 5; // 人類不太可能在 5ms 內重複按鍵
+        private readonly TimeSpan _keyTimeout = TimeSpan.FromMilliseconds(100);  // 放寬超時避免競爭條件
 
         private IntPtr _hookHandle = IntPtr.Zero;
         private LowLevelKeyboardProc _hookProc;
@@ -51,7 +40,6 @@ namespace MapleStoryMacro
         // 統計資料
         public int BlockedKeyCount { get; private set; } = 0;
         public int PassedKeyCount { get; private set; } = 0;
-        public int FalsePositiveCount { get; private set; } = 0; // 誤判計數（新增）
 
         // 調試模式
         public bool DebugMode { get; set; } = false;
@@ -60,14 +48,9 @@ namespace MapleStoryMacro
         public bool UseMarkerDetection { get; set; } = true;     // 使用 dwExtraInfo 標記
         public bool UseInjectedDetection { get; set; } = true;   // 使用 LLKHF_INJECTED 旗標
         public bool UseTimestampDetection { get; set; } = true;  // 使用時間戳記追蹤
-        public bool UseSequenceDetection { get; set; } = true;   // 使用序列模式檢測（新增）
-        public bool UseSpeedDetection { get; set; } = true;      // 使用速度檢測（新增）
-        
-        // 進階選項（新增）
-        public bool StrictMode { get; set; } = false;            // 嚴格模式：更積極攔截
-        public bool LearningMode { get; set; } = false;          // 學習模式：記錄模式但不攔截
 
         #region Windows API
+
 
         private const int WH_KEYBOARD_LL = 13;
         private const int WM_KEYDOWN = 0x0100;
@@ -105,22 +88,6 @@ namespace MapleStoryMacro
             public uint flags;
             public uint time;
             public UIntPtr dwExtraInfo;
-        }
-
-        #endregion
-
-        #region 內部資料結構
-
-        /// <summary>
-        /// 按鍵事件記錄（用於序列追蹤）
-        /// </summary>
-        private class KeyEvent
-        {
-            public uint VkCode { get; set; }
-            public bool IsKeyDown { get; set; }
-            public DateTime Timestamp { get; set; }
-            public uint Flags { get; set; }
-            public ulong ExtraInfo { get; set; }
         }
 
         #endregion
@@ -196,10 +163,7 @@ namespace MapleStoryMacro
         {
             BlockedKeyCount = 0;
             PassedKeyCount = 0;
-            FalsePositiveCount = 0;
             _pendingKeys.Clear();
-            _recentKeyEvents.Clear();
-            _lastKeyTime.Clear();
         }
 
         /// <summary>
@@ -210,7 +174,7 @@ namespace MapleStoryMacro
             _pendingKeys[vkCode] = DateTime.Now;
             
             // 清理過期的記錄
-            var expiredKeys = new List<uint>();
+            var expiredKeys = new System.Collections.Generic.List<uint>();
             foreach (var kvp in _pendingKeys)
             {
                 if (DateTime.Now - kvp.Value > _keyTimeout)
@@ -242,116 +206,9 @@ namespace MapleStoryMacro
         }
 
         /// <summary>
-        /// 記錄按鍵事件（用於序列分析）
-        /// </summary>
-        private void RecordKeyEvent(KBDLLHOOKSTRUCT hookStruct, int msg)
-        {
-            var evt = new KeyEvent
-            {
-                VkCode = hookStruct.vkCode,
-                IsKeyDown = (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN),
-                Timestamp = DateTime.Now,
-                Flags = hookStruct.flags,
-                ExtraInfo = hookStruct.dwExtraInfo.ToUInt64()
-            };
-            
-            _recentKeyEvents.Enqueue(evt);
-            
-            // 清理過期事件（只保留最近 500ms）
-            while (_recentKeyEvents.TryPeek(out KeyEvent? oldest) && 
-                   DateTime.Now - oldest.Timestamp > _sequenceWindow)
-            {
-                _recentKeyEvents.TryDequeue(out _);
-            }
-        }
-
-        /// <summary>
-        /// 檢測按鍵速度是否異常（速度檢測）
-        /// </summary>
-        private bool IsAbnormalSpeed(uint vkCode)
-        {
-            var now = DateTime.Now;
-            if (_lastKeyTime.TryGetValue(vkCode, out DateTime lastTime))
-            {
-                var interval = (now - lastTime).TotalMilliseconds;
-                if (interval < MIN_KEY_INTERVAL_MS)
-                {
-                    if (DebugMode)
-                        Debug.WriteLine($"[Blocker] 速度異常: VK=0x{vkCode:X2}, 間隔={interval:F1}ms");
-                    return true;
-                }
-            }
-            _lastKeyTime[vkCode] = now;
-            return false;
-        }
-
-        /// <summary>
-        /// 分析按鍵序列模式（序列檢測）
-        /// 檢測是否為巨集生成的按鍵序列
-        /// </summary>
-        private bool IsMacroSequencePattern()
-        {
-            if (_recentKeyEvents.Count < 3) return false;
-            
-            var events = _recentKeyEvents.ToList();
-            
-            // 模式 1：完美等間隔的按鍵序列（人類很難做到）
-            if (events.Count >= 5)
-            {
-                var intervals = new List<double>();
-                for (int i = 1; i < Math.Min(events.Count, 10); i++)
-                {
-                    var interval = (events[i].Timestamp - events[i - 1].Timestamp).TotalMilliseconds;
-                    intervals.Add(interval);
-                }
-                
-                if (intervals.Count >= 4)
-                {
-                    var avgInterval = intervals.Average();
-                    var variance = intervals.Select(x => Math.Pow(x - avgInterval, 2)).Average();
-                    var stdDev = Math.Sqrt(variance);
-                    
-                    // 標準差小於 2ms 且平均間隔在 10-100ms 之間 → 可能是巨集
-                    if (stdDev < 2.0 && avgInterval >= 10 && avgInterval <= 100)
-                    {
-                        if (DebugMode)
-                            Debug.WriteLine($"[Blocker] 檢測到規律序列: 平均={avgInterval:F1}ms, 標準差={stdDev:F1}ms");
-                        return true;
-                    }
-                }
-            }
-            
-            // 模式 2：相同的 ExtraInfo（通常是 0 或特定值）
-            var recentExtraInfos = events.Take(5).Select(e => e.ExtraInfo).ToList();
-            if (recentExtraInfos.Count >= 3 && recentExtraInfos.Distinct().Count() == 1)
-            {
-                var commonExtraInfo = recentExtraInfos[0];
-                // 排除 0（正常按鍵可能是 0）
-                if (commonExtraInfo != 0 && commonExtraInfo != MACRO_KEY_MARKER)
-                {
-                    if (DebugMode)
-                        Debug.WriteLine($"[Blocker] 檢測到相同 ExtraInfo: 0x{commonExtraInfo:X}");
-                    // 這個特徵不夠強，需要其他證據支持
-                    // return true;
-                }
-            }
-            
-            // 模式 3：組合鍵的注入旗標
-            var recentInjected = events.Take(3)
-                .Where(e => (e.Flags & LLKHF_INJECTED) != 0)
-                .Count();
-            if (recentInjected >= 2)
-            {
-                if (DebugMode)
-                    Debug.WriteLine($"[Blocker] 檢測到連續注入按鍵: {recentInjected} 個");
-                return true;
-            }
-            
-            return false;
-        }
-
-        /// <summary>
-        /// 鉤子回調函數 - 條件式攔截（增強版）
+        /// 鉤子回調函數 - 條件式攔截
+        /// 遊戲前景 → 攔截巨集按鍵（防止重複處理）
+        /// 遊戲背景 → 放行巨集按鍵（key state 必須更新，否則 GetKeyState 失效）
         /// </summary>
         private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
         {
@@ -365,89 +222,52 @@ namespace MapleStoryMacro
                 {
                     KBDLLHOOKSTRUCT hookStruct = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
                     
-                    // 記錄事件（用於序列分析）
-                    if (UseSequenceDetection)
-                    {
-                        RecordKeyEvent(hookStruct, msg);
-                    }
-                    
-                    bool isMacroKey = false;
-                    string detectionMethod = "";
-                    
-                    // 檢測方式 1：★ Marker 標記的按鍵（最可靠）
+                    // ★ Marker 標記的按鍵 → 條件式處理
                     if (UseMarkerDetection)
                     {
                         ulong extraInfo = hookStruct.dwExtraInfo.ToUInt64();
                         if (extraInfo == MACRO_KEY_MARKER)
                         {
-                            isMacroKey = true;
-                            detectionMethod = "Marker";
+                            bool isFg = IsGameForeground();
+                            if (isFg)
+                            {
+                                // 遊戲前景 → 攔截，防止重複處理
+                                BlockedKeyCount++;
+                                if (DebugMode)
+                                    Debug.WriteLine($"[Blocker] 攔截(Marker): VK=0x{hookStruct.vkCode:X2}, 遊戲前景=true");
+                                return (IntPtr)1;
+                            }
+                            else
+                            {
+                                // 遊戲背景 → 放行，key state 必須更新
+                                PassedKeyCount++;
+                                if (DebugMode)
+                                    Debug.WriteLine($"[Blocker] 放行(Marker): VK=0x{hookStruct.vkCode:X2}, 遊戲前景=false");
+                                return CallNextHookEx(_hookHandle, nCode, wParam, lParam);
+                            }
                         }
                     }
                     
                     // 檢測方式 2：LLKHF_INJECTED 旗標（程式注入的按鍵）
-                    if (!isMacroKey && UseInjectedDetection)
+                    if (UseInjectedDetection)
                     {
                         bool isInjected = (hookStruct.flags & LLKHF_INJECTED) != 0;
                         bool isLowerIL = (hookStruct.flags & LLKHF_LOWER_IL_INJECTED) != 0;
                         
-                        if ((isInjected || isLowerIL) && IsArrowOrTargetKey(hookStruct.vkCode))
+                        if (isInjected || isLowerIL)
                         {
-                            isMacroKey = true;
-                            detectionMethod = isLowerIL ? "LowerIL" : "Injected";
+                            // 只攔截方向鍵和目標按鍵
+                            if (IsArrowOrTargetKey(hookStruct.vkCode))
+                            {
+                                return HandleMacroKey(hookStruct, msg, nCode, wParam, lParam, isLowerIL ? "LowerIL" : "Injected");
+                            }
                         }
                     }
                     
                     // 檢測方式 3：時間戳記追蹤（備援）
-                    if (!isMacroKey && UseTimestampDetection && IsPendingKey(hookStruct.vkCode))
+                    if (UseTimestampDetection && IsPendingKey(hookStruct.vkCode))
                     {
-                        isMacroKey = true;
-                        detectionMethod = "Timestamp";
-                    }
-                    
-                    // 檢測方式 4：速度檢測（新增）
-                    if (!isMacroKey && UseSpeedDetection && IsAbnormalSpeed(hookStruct.vkCode))
-                    {
-                        // 速度異常但需要其他證據確認（避免誤判）
-                        if (IsArrowOrTargetKey(hookStruct.vkCode))
-                        {
-                            isMacroKey = true;
-                            detectionMethod = "Speed";
-                        }
-                    }
-                    
-                    // 檢測方式 5：序列模式檢測（新增）
-                    if (!isMacroKey && UseSequenceDetection && IsMacroSequencePattern())
-                    {
-                        if (IsArrowOrTargetKey(hookStruct.vkCode))
-                        {
-                            isMacroKey = true;
-                            detectionMethod = "Sequence";
-                        }
-                    }
-                    
-                    // 嚴格模式：降低判斷門檻
-                    if (StrictMode && !isMacroKey)
-                    {
-                        bool isInjected = (hookStruct.flags & LLKHF_INJECTED) != 0;
-                        if (isInjected && IsArrowOrTargetKey(hookStruct.vkCode))
-                        {
-                            isMacroKey = true;
-                            detectionMethod = "Strict+Injected";
-                        }
-                    }
-                    
-                    // 如果識別為巨集按鍵 → 條件式處理
-                    if (isMacroKey)
-                    {
-                        if (LearningMode)
-                        {
-                            // 學習模式：只記錄不攔截
-                            Debug.WriteLine($"[Blocker-Learning] 檢測到巨集按鍵({detectionMethod}): VK=0x{hookStruct.vkCode:X2}");
-                            return CallNextHookEx(_hookHandle, nCode, wParam, lParam);
-                        }
-                        
-                        return HandleMacroKey(hookStruct, msg, nCode, wParam, lParam, detectionMethod);
+                        return HandleMacroKey(hookStruct, msg, nCode, wParam, lParam, "Timestamp");
                     }
                 }
             }
@@ -495,6 +315,7 @@ namespace MapleStoryMacro
         
         /// <summary>
         /// 檢查是否為方向鍵或目標按鍵（用於 Injected 檢測）
+        /// 注意：組合鍵時所有注入的按鍵都應該被攔截
         /// </summary>
         private bool IsArrowOrTargetKey(uint vkCode)
         {
@@ -537,14 +358,6 @@ namespace MapleStoryMacro
                 return true;
                 
             return false;
-        }
-
-        /// <summary>
-        /// 取得統計摘要
-        /// </summary>
-        public string GetStatsSummary()
-        {
-            return $"攔截: {BlockedKeyCount}, 放行: {PassedKeyCount}, 誤判: {FalsePositiveCount}";
         }
 
         #region IDisposable

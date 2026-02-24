@@ -50,20 +50,20 @@ namespace MapleStoryMacro
             btnMemoryScanner = new CyberButton();
             btnSaveSettings = new CyberButton();
             btnImportSettings = new CyberButton();
-            grpRecording = new SafeCyberGroupBox();
+            grpRecording = new CyberGroupBox();
             label2 = new Label();
-            grpScript = new SafeCyberGroupBox();
+            grpScript = new CyberGroupBox();
             label3 = new Label();
-            grpEvents = new SafeCyberGroupBox();
-            label6 = new Label();
-            cmbArrowMode = new ComboBox();
-            chkPositionCorrection = new System.Windows.Forms.CheckBox();
-            grpPlayback = new SafeCyberGroupBox();
+            grpEvents = new CyberGroupBox();
+            label4 = new Label();
+            grpPlayback = new CyberGroupBox();
             label1 = new Label();
-            txtPauseHotkey = new CyberButton();
             lblLoopCount = new Label();
-            grpAdvanced = new SafeCyberGroupBox();
+            grpAdvanced = new CyberGroupBox();
             label5 = new Label();
+            grpPosition = new CyberGroupBox();
+            label6 = new Label();
+            chkPositionCorrection = new System.Windows.Forms.CheckBox();
             logContextMenu.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)numPlayTimes).BeginInit();
             grpRecording.SuspendLayout();
@@ -71,6 +71,7 @@ namespace MapleStoryMacro
             grpEvents.SuspendLayout();
             grpPlayback.SuspendLayout();
             grpAdvanced.SuspendLayout();
+            grpPosition.SuspendLayout();
             SuspendLayout();
             // 
             // txtWindowTitle
@@ -166,9 +167,9 @@ namespace MapleStoryMacro
             btnStartRecording.Lighting = false;
             btnStartRecording.LinearGradient_Background = false;
             btnStartRecording.LinearGradientPen = false;
-            btnStartRecording.Location = new Point(9, 35);
+            btnStartRecording.Location = new Point(10, 35);
             btnStartRecording.Name = "btnStartRecording";
-            btnStartRecording.PenWidth = 3;
+            btnStartRecording.PenWidth = 15;
             btnStartRecording.Rounding = true;
             btnStartRecording.RoundingInt = 70;
             btnStartRecording.Size = new Size(75, 35);
@@ -207,9 +208,9 @@ namespace MapleStoryMacro
             btnStopRecording.Lighting = false;
             btnStopRecording.LinearGradient_Background = false;
             btnStopRecording.LinearGradientPen = false;
-            btnStopRecording.Location = new Point(86, 35);
+            btnStopRecording.Location = new Point(90, 35);
             btnStopRecording.Name = "btnStopRecording";
-            btnStopRecording.PenWidth = 3;
+            btnStopRecording.PenWidth = 15;
             btnStopRecording.Rounding = true;
             btnStopRecording.RoundingInt = 70;
             btnStopRecording.Size = new Size(75, 35);
@@ -249,7 +250,7 @@ namespace MapleStoryMacro
             btnRefreshWindow.LinearGradientPen = false;
             btnRefreshWindow.Location = new Point(231, 22);
             btnRefreshWindow.Name = "btnRefreshWindow";
-            btnRefreshWindow.PenWidth = 3;
+            btnRefreshWindow.PenWidth = 15;
             btnRefreshWindow.Rounding = true;
             btnRefreshWindow.RoundingInt = 70;
             btnRefreshWindow.Size = new Size(90, 36);
@@ -289,7 +290,7 @@ namespace MapleStoryMacro
             btnLockWindow.LinearGradientPen = false;
             btnLockWindow.Location = new Point(339, 22);
             btnLockWindow.Name = "btnLockWindow";
-            btnLockWindow.PenWidth = 3;
+            btnLockWindow.PenWidth = 15;
             btnLockWindow.Rounding = true;
             btnLockWindow.RoundingInt = 70;
             btnLockWindow.Size = new Size(90, 36);
@@ -327,9 +328,9 @@ namespace MapleStoryMacro
             btnSaveScript.Lighting = false;
             btnSaveScript.LinearGradient_Background = false;
             btnSaveScript.LinearGradientPen = false;
-            btnSaveScript.Location = new Point(11, 35);
+            btnSaveScript.Location = new Point(10, 35);
             btnSaveScript.Name = "btnSaveScript";
-            btnSaveScript.PenWidth = 3;
+            btnSaveScript.PenWidth = 15;
             btnSaveScript.Rounding = true;
             btnSaveScript.RoundingInt = 70;
             btnSaveScript.Size = new Size(68, 35);
@@ -367,9 +368,9 @@ namespace MapleStoryMacro
             btnLoadScript.Lighting = false;
             btnLoadScript.LinearGradient_Background = false;
             btnLoadScript.LinearGradientPen = false;
-            btnLoadScript.Location = new Point(84, 35);
+            btnLoadScript.Location = new Point(83, 35);
             btnLoadScript.Name = "btnLoadScript";
-            btnLoadScript.PenWidth = 3;
+            btnLoadScript.PenWidth = 15;
             btnLoadScript.Rounding = true;
             btnLoadScript.RoundingInt = 70;
             btnLoadScript.Size = new Size(68, 35);
@@ -409,7 +410,7 @@ namespace MapleStoryMacro
             btnClearEvents.LinearGradientPen = false;
             btnClearEvents.Location = new Point(101, 35);
             btnClearEvents.Name = "btnClearEvents";
-            btnClearEvents.PenWidth = 3;
+            btnClearEvents.PenWidth = 15;
             btnClearEvents.Rounding = true;
             btnClearEvents.RoundingInt = 70;
             btnClearEvents.Size = new Size(60, 35);
@@ -449,7 +450,7 @@ namespace MapleStoryMacro
             btnViewEvents.LinearGradientPen = false;
             btnViewEvents.Location = new Point(40, 35);
             btnViewEvents.Name = "btnViewEvents";
-            btnViewEvents.PenWidth = 3;
+            btnViewEvents.PenWidth = 15;
             btnViewEvents.Rounding = true;
             btnViewEvents.RoundingInt = 70;
             btnViewEvents.Size = new Size(55, 35);
@@ -487,9 +488,9 @@ namespace MapleStoryMacro
             btnEditEvents.Lighting = false;
             btnEditEvents.LinearGradient_Background = false;
             btnEditEvents.LinearGradientPen = false;
-            btnEditEvents.Location = new Point(157, 35);
+            btnEditEvents.Location = new Point(156, 35);
             btnEditEvents.Name = "btnEditEvents";
-            btnEditEvents.PenWidth = 3;
+            btnEditEvents.PenWidth = 15;
             btnEditEvents.Rounding = true;
             btnEditEvents.RoundingInt = 70;
             btnEditEvents.Size = new Size(68, 35);
@@ -527,12 +528,12 @@ namespace MapleStoryMacro
             btnStartPlayback.Lighting = false;
             btnStartPlayback.LinearGradient_Background = false;
             btnStartPlayback.LinearGradientPen = false;
-            btnStartPlayback.Location = new Point(12, 35);
+            btnStartPlayback.Location = new Point(10, 35);
             btnStartPlayback.Name = "btnStartPlayback";
-            btnStartPlayback.PenWidth = 3;
+            btnStartPlayback.PenWidth = 15;
             btnStartPlayback.Rounding = true;
             btnStartPlayback.RoundingInt = 70;
-            btnStartPlayback.Size = new Size(75, 35);
+            btnStartPlayback.Size = new Size(90, 35);
             btnStartPlayback.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
             btnStartPlayback.TabIndex = 11;
             btnStartPlayback.Tag = "Cyber";
@@ -568,12 +569,12 @@ namespace MapleStoryMacro
             btnStopPlayback.Lighting = false;
             btnStopPlayback.LinearGradient_Background = false;
             btnStopPlayback.LinearGradientPen = false;
-            btnStopPlayback.Location = new Point(92, 35);
+            btnStopPlayback.Location = new Point(110, 35);
             btnStopPlayback.Name = "btnStopPlayback";
-            btnStopPlayback.PenWidth = 3;
+            btnStopPlayback.PenWidth = 15;
             btnStopPlayback.Rounding = true;
             btnStopPlayback.RoundingInt = 70;
-            btnStopPlayback.Size = new Size(75, 35);
+            btnStopPlayback.Size = new Size(90, 35);
             btnStopPlayback.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
             btnStopPlayback.TabIndex = 12;
             btnStopPlayback.Tag = "Cyber";
@@ -587,11 +588,11 @@ namespace MapleStoryMacro
             numPlayTimes.BackColor = Color.FromArgb(60, 60, 65);
             numPlayTimes.Font = new Font("Segoe UI", 10F);
             numPlayTimes.ForeColor = Color.White;
-            numPlayTimes.Location = new Point(264, 41);
+            numPlayTimes.Location = new Point(280, 41);
             numPlayTimes.Maximum = new decimal(new int[] { 9999, 0, 0, 0 });
             numPlayTimes.Minimum = new decimal(new int[] { 1, 0, 0, 0 });
             numPlayTimes.Name = "numPlayTimes";
-            numPlayTimes.Size = new Size(68, 25);
+            numPlayTimes.Size = new Size(60, 25);
             numPlayTimes.TabIndex = 13;
             numPlayTimes.Value = new decimal(new int[] { 1, 0, 0, 0 });
             // 
@@ -654,12 +655,12 @@ namespace MapleStoryMacro
             btnHotkeySettings.Lighting = false;
             btnHotkeySettings.LinearGradient_Background = false;
             btnHotkeySettings.LinearGradientPen = false;
-            btnHotkeySettings.Location = new Point(12, 35);
+            btnHotkeySettings.Location = new Point(444, 22);
             btnHotkeySettings.Name = "btnHotkeySettings";
-            btnHotkeySettings.PenWidth = 3;
+            btnHotkeySettings.PenWidth = 15;
             btnHotkeySettings.Rounding = true;
             btnHotkeySettings.RoundingInt = 70;
-            btnHotkeySettings.Size = new Size(90, 35);
+            btnHotkeySettings.Size = new Size(100, 36);
             btnHotkeySettings.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
             btnHotkeySettings.TabIndex = 17;
             btnHotkeySettings.Tag = "Cyber";
@@ -694,12 +695,12 @@ namespace MapleStoryMacro
             btnCustomKeys.Lighting = false;
             btnCustomKeys.LinearGradient_Background = false;
             btnCustomKeys.LinearGradientPen = false;
-            btnCustomKeys.Location = new Point(74, 35);
+            btnCustomKeys.Location = new Point(12, 35);
             btnCustomKeys.Name = "btnCustomKeys";
-            btnCustomKeys.PenWidth = 3;
+            btnCustomKeys.PenWidth = 15;
             btnCustomKeys.Rounding = true;
             btnCustomKeys.RoundingInt = 70;
-            btnCustomKeys.Size = new Size(66, 35);
+            btnCustomKeys.Size = new Size(90, 35);
             btnCustomKeys.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
             btnCustomKeys.TabIndex = 24;
             btnCustomKeys.Tag = "Cyber";
@@ -734,12 +735,12 @@ namespace MapleStoryMacro
             btnScheduler.Lighting = false;
             btnScheduler.LinearGradient_Background = false;
             btnScheduler.LinearGradientPen = false;
-            btnScheduler.Location = new Point(144, 35);
+            btnScheduler.Location = new Point(107, 35);
             btnScheduler.Name = "btnScheduler";
-            btnScheduler.PenWidth = 3;
+            btnScheduler.PenWidth = 15;
             btnScheduler.Rounding = true;
             btnScheduler.RoundingInt = 70;
-            btnScheduler.Size = new Size(60, 35);
+            btnScheduler.Size = new Size(80, 35);
             btnScheduler.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
             btnScheduler.TabIndex = 25;
             btnScheduler.Tag = "Cyber";
@@ -774,12 +775,12 @@ namespace MapleStoryMacro
             btnStatistics.Lighting = false;
             btnStatistics.LinearGradient_Background = false;
             btnStatistics.LinearGradientPen = false;
-            btnStatistics.Location = new Point(208, 35);
+            btnStatistics.Location = new Point(192, 35);
             btnStatistics.Name = "btnStatistics";
-            btnStatistics.PenWidth = 3;
+            btnStatistics.PenWidth = 15;
             btnStatistics.Rounding = true;
             btnStatistics.RoundingInt = 70;
-            btnStatistics.Size = new Size(56, 35);
+            btnStatistics.Size = new Size(70, 35);
             btnStatistics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
             btnStatistics.TabIndex = 26;
             btnStatistics.Tag = "Cyber";
@@ -816,10 +817,10 @@ namespace MapleStoryMacro
             btnMemoryScanner.LinearGradientPen = false;
             btnMemoryScanner.Location = new Point(12, 35);
             btnMemoryScanner.Name = "btnMemoryScanner";
-            btnMemoryScanner.PenWidth = 3;
+            btnMemoryScanner.PenWidth = 15;
             btnMemoryScanner.Rounding = true;
             btnMemoryScanner.RoundingInt = 70;
-            btnMemoryScanner.Size = new Size(56, 35);
+            btnMemoryScanner.Size = new Size(80, 35);
             btnMemoryScanner.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
             btnMemoryScanner.TabIndex = 31;
             btnMemoryScanner.Tag = "Cyber";
@@ -855,9 +856,9 @@ namespace MapleStoryMacro
             btnSaveSettings.Lighting = false;
             btnSaveSettings.LinearGradient_Background = false;
             btnSaveSettings.LinearGradientPen = false;
-            btnSaveSettings.Location = new Point(446, 23);
+            btnSaveSettings.Location = new Point(556, 10);
             btnSaveSettings.Name = "btnSaveSettings";
-            btnSaveSettings.PenWidth = 3;
+            btnSaveSettings.PenWidth = 15;
             btnSaveSettings.Rounding = true;
             btnSaveSettings.RoundingInt = 70;
             btnSaveSettings.Size = new Size(99, 35);
@@ -896,9 +897,9 @@ namespace MapleStoryMacro
             btnImportSettings.Lighting = false;
             btnImportSettings.LinearGradient_Background = false;
             btnImportSettings.LinearGradientPen = false;
-            btnImportSettings.Location = new Point(559, 23);
+            btnImportSettings.Location = new Point(556, 49);
             btnImportSettings.Name = "btnImportSettings";
-            btnImportSettings.PenWidth = 3;
+            btnImportSettings.PenWidth = 15;
             btnImportSettings.Rounding = true;
             btnImportSettings.RoundingInt = 70;
             btnImportSettings.Size = new Size(99, 35);
@@ -935,13 +936,12 @@ namespace MapleStoryMacro
             grpRecording.LinearGradient_Background = false;
             grpRecording.LinearGradientPen = false;
             grpRecording.Location = new Point(19, 341);
-            grpRecording.MinimumSize = new Size(40, 40);
             grpRecording.Name = "grpRecording";
-            grpRecording.PenWidth = 3;
+            grpRecording.PenWidth = 15;
             grpRecording.RGB = false;
             grpRecording.Rounding = true;
             grpRecording.RoundingInt = 12;
-            grpRecording.Size = new Size(168, 80);
+            grpRecording.Size = new Size(175, 80);
             grpRecording.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
             grpRecording.TabIndex = 20;
             grpRecording.TabStop = false;
@@ -952,7 +952,7 @@ namespace MapleStoryMacro
             // label2
             // 
             label2.AutoSize = true;
-            label2.Location = new Point(56, 12);
+            label2.Location = new Point(60, 11);
             label2.Name = "label2";
             label2.Size = new Size(55, 15);
             label2.TabIndex = 6;
@@ -982,10 +982,9 @@ namespace MapleStoryMacro
             grpScript.Lighting = false;
             grpScript.LinearGradient_Background = false;
             grpScript.LinearGradientPen = false;
-            grpScript.Location = new Point(194, 341);
-            grpScript.MinimumSize = new Size(40, 40);
+            grpScript.Location = new Point(204, 341);
             grpScript.Name = "grpScript";
-            grpScript.PenWidth = 3;
+            grpScript.PenWidth = 15;
             grpScript.RGB = false;
             grpScript.Rounding = true;
             grpScript.RoundingInt = 12;
@@ -1000,7 +999,7 @@ namespace MapleStoryMacro
             // label3
             // 
             label3.AutoSize = true;
-            label3.Location = new Point(92, 12);
+            label3.Location = new Point(91, 11);
             label3.Name = "label3";
             label3.Size = new Size(55, 15);
             label3.TabIndex = 11;
@@ -1020,23 +1019,22 @@ namespace MapleStoryMacro
             grpEvents.ColorLighting = Color.FromArgb(29, 200, 238);
             grpEvents.ColorPen_1 = Color.FromArgb(37, 52, 68);
             grpEvents.ColorPen_2 = Color.FromArgb(41, 63, 86);
-            grpEvents.Controls.Add(label6);
-            grpEvents.Controls.Add(btnHotkeySettings);
-            grpEvents.Controls.Add(cmbArrowMode);
+            grpEvents.Controls.Add(label4);
+            grpEvents.Controls.Add(btnViewEvents);
+            grpEvents.Controls.Add(btnClearEvents);
             grpEvents.CyberGroupBoxStyle = ReaLTaiizor.Enum.Cyber.StateStyle.Custom;
             grpEvents.Font = new Font("Microsoft JhengHei UI", 9F, FontStyle.Bold);
             grpEvents.ForeColor = Color.White;
             grpEvents.Lighting = false;
             grpEvents.LinearGradient_Background = false;
             grpEvents.LinearGradientPen = false;
-            grpEvents.Location = new Point(437, 341);
-            grpEvents.MinimumSize = new Size(40, 40);
+            grpEvents.Location = new Point(449, 341);
             grpEvents.Name = "grpEvents";
-            grpEvents.PenWidth = 3;
+            grpEvents.PenWidth = 15;
             grpEvents.RGB = false;
             grpEvents.Rounding = true;
             grpEvents.RoundingInt = 12;
-            grpEvents.Size = new Size(215, 80);
+            grpEvents.Size = new Size(203, 80);
             grpEvents.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
             grpEvents.TabIndex = 22;
             grpEvents.TabStop = false;
@@ -1044,41 +1042,14 @@ namespace MapleStoryMacro
             grpEvents.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
             grpEvents.Timer_RGB = 300;
             // 
-            // label6
+            // label4
             // 
-            label6.AutoSize = true;
-            label6.Location = new Point(95, 12);
-            label6.Name = "label6";
-            label6.Size = new Size(31, 15);
-            label6.TabIndex = 14;
-            label6.Text = "設定";
-            // 
-            // cmbArrowMode
-            // 
-            cmbArrowMode.BackColor = Color.FromArgb(55, 55, 60);
-            cmbArrowMode.DropDownStyle = ComboBoxStyle.DropDownList;
-            cmbArrowMode.FlatStyle = FlatStyle.Flat;
-            cmbArrowMode.Font = new Font("Microsoft JhengHei UI", 9F);
-            cmbArrowMode.ForeColor = Color.White;
-            cmbArrowMode.FormattingEnabled = true;
-            cmbArrowMode.Items.AddRange(new object[] { "S2C", "TAB", "SWB" });
-            cmbArrowMode.Location = new Point(112, 42);
-            cmbArrowMode.Name = "cmbArrowMode";
-            cmbArrowMode.Size = new Size(90, 23);
-            cmbArrowMode.TabIndex = 35;
-            // 
-            // chkPositionCorrection
-            // 
-            chkPositionCorrection.AutoSize = true;
-            chkPositionCorrection.Font = new Font("Microsoft JhengHei UI", 8F);
-            chkPositionCorrection.ForeColor = Color.FromArgb(200, 200, 200);
-            chkPositionCorrection.Location = new Point(0, 0);
-            chkPositionCorrection.Name = "chkPositionCorrection";
-            chkPositionCorrection.Size = new Size(48, 18);
-            chkPositionCorrection.TabIndex = 33;
-            chkPositionCorrection.Text = "修正";
-            chkPositionCorrection.UseVisualStyleBackColor = true;
-            chkPositionCorrection.Visible = false;
+            label4.AutoSize = true;
+            label4.Location = new Point(72, 11);
+            label4.Name = "label4";
+            label4.Size = new Size(55, 15);
+            label4.TabIndex = 10;
+            label4.Text = "事件管理";
             // 
             // grpPlayback
             // 
@@ -1096,7 +1067,6 @@ namespace MapleStoryMacro
             grpPlayback.ColorPen_2 = Color.FromArgb(41, 63, 86);
             grpPlayback.Controls.Add(label1);
             grpPlayback.Controls.Add(btnStartPlayback);
-            grpPlayback.Controls.Add(txtPauseHotkey);
             grpPlayback.Controls.Add(btnStopPlayback);
             grpPlayback.Controls.Add(lblLoopCount);
             grpPlayback.Controls.Add(numPlayTimes);
@@ -1107,9 +1077,8 @@ namespace MapleStoryMacro
             grpPlayback.LinearGradient_Background = false;
             grpPlayback.LinearGradientPen = false;
             grpPlayback.Location = new Point(19, 431);
-            grpPlayback.MinimumSize = new Size(40, 40);
             grpPlayback.Name = "grpPlayback";
-            grpPlayback.PenWidth = 3;
+            grpPlayback.PenWidth = 15;
             grpPlayback.RGB = false;
             grpPlayback.Rounding = true;
             grpPlayback.RoundingInt = 12;
@@ -1124,63 +1093,22 @@ namespace MapleStoryMacro
             // label1
             // 
             label1.AutoSize = true;
-            label1.Location = new Point(132, 12);
+            label1.Location = new Point(154, 12);
             label1.Name = "label1";
             label1.Size = new Size(55, 15);
             label1.TabIndex = 14;
             label1.Text = "播放控制";
-            // 
-            // txtPauseHotkey
-            // 
-            txtPauseHotkey.Alpha = 20;
-            txtPauseHotkey.BackColor = Color.Transparent;
-            txtPauseHotkey.Background = true;
-            txtPauseHotkey.Background_WidthPen = 4F;
-            txtPauseHotkey.BackgroundPen = true;
-            txtPauseHotkey.ColorBackground = Color.CornflowerBlue;
-            txtPauseHotkey.ColorBackground_1 = Color.FromArgb(37, 52, 68);
-            txtPauseHotkey.ColorBackground_2 = Color.FromArgb(41, 63, 86);
-            txtPauseHotkey.ColorBackground_Pen = Color.FromArgb(29, 200, 238);
-            txtPauseHotkey.ColorLighting = Color.FromArgb(29, 200, 238);
-            txtPauseHotkey.ColorPen_1 = Color.FromArgb(37, 52, 68);
-            txtPauseHotkey.ColorPen_2 = Color.FromArgb(41, 63, 86);
-            txtPauseHotkey.CyberButtonStyle = ReaLTaiizor.Enum.Cyber.StateStyle.Custom;
-            txtPauseHotkey.Effect_1 = true;
-            txtPauseHotkey.Effect_1_ColorBackground = Color.FromArgb(29, 200, 238);
-            txtPauseHotkey.Effect_1_Transparency = 25;
-            txtPauseHotkey.Effect_2 = true;
-            txtPauseHotkey.Effect_2_ColorBackground = Color.White;
-            txtPauseHotkey.Effect_2_Transparency = 20;
-            txtPauseHotkey.Font = new Font("Microsoft JhengHei UI", 9F, FontStyle.Bold);
-            txtPauseHotkey.ForeColor = Color.FromArgb(245, 245, 245);
-            txtPauseHotkey.Lighting = false;
-            txtPauseHotkey.LinearGradient_Background = false;
-            txtPauseHotkey.LinearGradientPen = false;
-            txtPauseHotkey.Location = new Point(173, 35);
-            txtPauseHotkey.Name = "txtPauseHotkey";
-            txtPauseHotkey.PenWidth = 3;
-            txtPauseHotkey.Rounding = true;
-            txtPauseHotkey.RoundingInt = 70;
-            txtPauseHotkey.Size = new Size(75, 35);
-            txtPauseHotkey.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
-            txtPauseHotkey.TabIndex = 12;
-            txtPauseHotkey.Tag = "Cyber";
-            txtPauseHotkey.TextButton = "⏸ 暫停";
-            txtPauseHotkey.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
-            txtPauseHotkey.Timer_Effect_1 = 5;
-            txtPauseHotkey.Timer_RGB = 300;
             // 
             // lblLoopCount
             // 
             lblLoopCount.AutoSize = true;
             lblLoopCount.Font = new Font("Microsoft JhengHei UI", 9F);
             lblLoopCount.ForeColor = Color.White;
-            lblLoopCount.Location = new Point(268, 21);
+            lblLoopCount.Location = new Point(212, 46);
             lblLoopCount.Name = "lblLoopCount";
             lblLoopCount.Size = new Size(58, 15);
             lblLoopCount.TabIndex = 13;
             lblLoopCount.Text = "循環次數:";
-            lblLoopCount.Click += lblLoopCount_Click;
             // 
             // grpAdvanced
             // 
@@ -1197,7 +1125,6 @@ namespace MapleStoryMacro
             grpAdvanced.ColorPen_1 = Color.FromArgb(37, 52, 68);
             grpAdvanced.ColorPen_2 = Color.FromArgb(41, 63, 86);
             grpAdvanced.Controls.Add(label5);
-            grpAdvanced.Controls.Add(btnMemoryScanner);
             grpAdvanced.Controls.Add(btnCustomKeys);
             grpAdvanced.Controls.Add(btnScheduler);
             grpAdvanced.Controls.Add(btnStatistics);
@@ -1208,9 +1135,8 @@ namespace MapleStoryMacro
             grpAdvanced.LinearGradient_Background = false;
             grpAdvanced.LinearGradientPen = false;
             grpAdvanced.Location = new Point(379, 431);
-            grpAdvanced.MinimumSize = new Size(40, 40);
             grpAdvanced.Name = "grpAdvanced";
-            grpAdvanced.PenWidth = 3;
+            grpAdvanced.PenWidth = 15;
             grpAdvanced.RGB = false;
             grpAdvanced.Rounding = true;
             grpAdvanced.RoundingInt = 12;
@@ -1231,6 +1157,64 @@ namespace MapleStoryMacro
             label5.TabIndex = 14;
             label5.Text = "進階功能";
             // 
+            // grpPosition
+            // 
+            grpPosition.Alpha = 20;
+            grpPosition.BackColor = Color.Transparent;
+            grpPosition.Background = true;
+            grpPosition.Background_WidthPen = 3F;
+            grpPosition.BackgroundPen = true;
+            grpPosition.ColorBackground = Color.FromArgb(45, 45, 48);
+            grpPosition.ColorBackground_1 = Color.FromArgb(52, 37, 37);
+            grpPosition.ColorBackground_2 = Color.FromArgb(68, 50, 41);
+            grpPosition.ColorBackground_Pen = Color.FromArgb(238, 160, 29);
+            grpPosition.ColorLighting = Color.FromArgb(238, 160, 29);
+            grpPosition.ColorPen_1 = Color.FromArgb(52, 37, 37);
+            grpPosition.ColorPen_2 = Color.FromArgb(68, 50, 41);
+            grpPosition.Controls.Add(label6);
+            grpPosition.Controls.Add(btnMemoryScanner);
+            grpPosition.Controls.Add(chkPositionCorrection);
+            grpPosition.CyberGroupBoxStyle = ReaLTaiizor.Enum.Cyber.StateStyle.Custom;
+            grpPosition.Font = new Font("Microsoft JhengHei UI", 9F, FontStyle.Bold);
+            grpPosition.ForeColor = Color.White;
+            grpPosition.Lighting = false;
+            grpPosition.LinearGradient_Background = false;
+            grpPosition.LinearGradientPen = false;
+            grpPosition.Location = new Point(502, 521);
+            grpPosition.Name = "grpPosition";
+            grpPosition.PenWidth = 15;
+            grpPosition.RGB = false;
+            grpPosition.Rounding = true;
+            grpPosition.RoundingInt = 12;
+            grpPosition.Size = new Size(150, 80);
+            grpPosition.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
+            grpPosition.TabIndex = 32;
+            grpPosition.TabStop = false;
+            grpPosition.Tag = "Cyber";
+            grpPosition.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            grpPosition.Timer_RGB = 300;
+            // 
+            // label6
+            // 
+            label6.AutoSize = true;
+            label6.Location = new Point(50, 12);
+            label6.Name = "label6";
+            label6.Size = new Size(55, 15);
+            label6.TabIndex = 14;
+            label6.Text = "座標功能";
+            // 
+            // chkPositionCorrection
+            // 
+            chkPositionCorrection.AutoSize = true;
+            chkPositionCorrection.Font = new Font("Microsoft JhengHei UI", 8F);
+            chkPositionCorrection.ForeColor = Color.FromArgb(200, 200, 200);
+            chkPositionCorrection.Location = new Point(97, 40);
+            chkPositionCorrection.Name = "chkPositionCorrection";
+            chkPositionCorrection.Size = new Size(48, 18);
+            chkPositionCorrection.TabIndex = 33;
+            chkPositionCorrection.Text = "修正";
+            chkPositionCorrection.UseVisualStyleBackColor = true;
+            // 
             // Form1
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
@@ -1244,11 +1228,13 @@ namespace MapleStoryMacro
             Controls.Add(btnImportSettings);
             Controls.Add(btnSaveSettings);
             Controls.Add(btnLockWindow);
+            Controls.Add(btnHotkeySettings);
             Controls.Add(grpRecording);
             Controls.Add(grpScript);
             Controls.Add(grpEvents);
             Controls.Add(grpPlayback);
             Controls.Add(grpAdvanced);
+            Controls.Add(grpPosition);
             Controls.Add(lblWindowStatus);
             Controls.Add(lblRecordingStatus);
             Controls.Add(lblPlaybackStatus);
@@ -1270,6 +1256,8 @@ namespace MapleStoryMacro
             grpPlayback.PerformLayout();
             grpAdvanced.ResumeLayout(false);
             grpAdvanced.PerformLayout();
+            grpPosition.ResumeLayout(false);
+            grpPosition.PerformLayout();
             ResumeLayout(false);
             PerformLayout();
         }
@@ -1305,25 +1293,25 @@ namespace MapleStoryMacro
         public System.Windows.Forms.Label lblPlaybackStatus;
         
         // GroupBox 分組框
-        private SafeCyberGroupBox grpRecording;
-        private SafeCyberGroupBox grpScript;
-        private SafeCyberGroupBox grpEvents;
-        private SafeCyberGroupBox grpPlayback;
-        private SafeCyberGroupBox grpAdvanced;
+        private ReaLTaiizor.Controls.CyberGroupBox grpRecording;
+        private ReaLTaiizor.Controls.CyberGroupBox grpScript;
+        private ReaLTaiizor.Controls.CyberGroupBox grpEvents;
+        private ReaLTaiizor.Controls.CyberGroupBox grpPlayback;
+        private ReaLTaiizor.Controls.CyberGroupBox grpAdvanced;
         private System.Windows.Forms.Label lblLoopCount;
         private Label label2;
         private Label label3;
+        private Label label4;
         private Label label1;
         private Label label5;
         private Label label6;
+        private ReaLTaiizor.Controls.CyberGroupBox grpPosition;
         public System.Windows.Forms.CheckBox chkPositionCorrection;
-        public System.Windows.Forms.ComboBox cmbArrowMode;
 
         // 日誌控制項
         private System.Windows.Forms.ListBox lstLog;
         private System.Windows.Forms.ContextMenuStrip logContextMenu;
         private System.Windows.Forms.ToolStripMenuItem menuCopyLog;
         private System.Windows.Forms.ToolStripMenuItem menuClearLog;
-        public CyberButton txtPauseHotkey;
     }
 }

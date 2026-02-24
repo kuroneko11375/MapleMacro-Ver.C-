@@ -8,7 +8,6 @@ using System.Windows.Forms;
 using System.IO;
 using System.Diagnostics;
 using System.Linq;
-using System.Threading.Tasks;
 
 namespace MapleStoryMacro
 {
@@ -27,15 +26,8 @@ namespace MapleStoryMacro
         // 全局熱鍵設定
         private Keys playHotkey = Keys.F9;      // 預設播放熱鍵
         private Keys stopHotkey = Keys.F10;     // 預設停止熱鍵
-        private Keys pauseHotkey = Keys.F11;    // 預設暫停熱鍵
-        private Keys recordHotkey = Keys.F8;    // 預設錄製熱鍵
         private bool hotkeyEnabled = true;      // 熱鍵是否啟用
-        private KeyboardHookDLL hotkeyHook;     // 全局熱鍵監聯器
-
-        // 暫停控制
-        private volatile bool isPaused = false;           // 暫停狀態
-        private readonly object pauseLock = new object(); // 暫停鎖
-        private volatile bool customKeysPaused = false;   // 自定義按鍵暫停狀態
+        private KeyboardHookDLL hotkeyHook;     // 全局熱鍵監聽器
 
         // 自定義按鍵槽位 (15個)
         private CustomKeySlot[] customKeySlots = new CustomKeySlot[15];
@@ -43,21 +35,11 @@ namespace MapleStoryMacro
         // 執行統計
         private PlaybackStatistics statistics = new PlaybackStatistics();
 
-        // 小地圖追蹤器
-        private MinimapTracker? minimapTracker;
-
-        // 位置修正器
-        private PositionCorrector? positionCorrector;
-        private PositionCorrectionSettings positionCorrectionSettings = new PositionCorrectionSettings();
+        // 記憶體掃描器
+        private MemoryScanner? memoryScanner;
 
         // 座標修正開關
         private bool positionCorrectionEnabled = false;
-        private volatile bool _correctionSettingsChanged = false; // ★ 設定變更旗標
-        private volatile bool isCorrecting = false; // ★ 位置修正中（阻塞腳本）
-
-        // ★ F7 邊界設定熱鍵 — 狀態機 (0=左,1=右,2=上,3=下)
-        private Keys boundaryHotkey = Keys.F7;
-        private int _boundarySetState = -1; // -1=未啟動, 0~3=設定中
 
         // 定時執行
         private List<ScheduleTask> scheduleTasks = new List<ScheduleTask>();
@@ -299,12 +281,6 @@ namespace MapleStoryMacro
         {
             InitializeComponent();
 
-            // 初始化日誌系統
-            Logger.Initialize(enableDetailedLogging: false, logRetentionDays: 7);
-            Logger.Info("=== MapleStory Macro 啟動 ===");
-            Logger.Info($"版本: {System.Reflection.Assembly.GetExecutingAssembly().GetName().Version}");
-
-
             // 初始化自定義按鍵槽位
             for (int i = 0; i < 15; i++)
             {
@@ -321,11 +297,11 @@ namespace MapleStoryMacro
             btnStopRecording.Click += BtnStopRecording_Click;
             btnSaveScript.Click += BtnSaveScript_Click;
             btnLoadScript.Click += BtnLoadScript_Click;
-            // btnClearEvents 和 btnViewEvents 功能已整合到編輯器中
+            btnClearEvents.Click += BtnClearEvents_Click;
+            btnViewEvents.Click += BtnViewEvents_Click;
             btnEditEvents.Click += BtnEditEvents_Click;
             btnStartPlayback.Click += BtnStartPlayback_Click;
             btnStopPlayback.Click += BtnStopPlayback_Click;
-            txtPauseHotkey.Click += BtnPausePlayback_Click;
             btnRefreshWindow.Click += BtnRefreshWindow_Click;
             btnLockWindow.Click += BtnLockWindow_Click;
             btnHotkeySettings.Click += (s, e) => OpenHotkeySettings();
@@ -334,15 +310,6 @@ namespace MapleStoryMacro
             btnStatistics.Click += (s, e) => ShowStatistics();
             btnMemoryScanner.Click += (s, e) => OpenMemoryScannerChoice();
             FormClosing += Form1_FormClosing;
-
-            // ★ 方向鍵模式下拉框事件（控件已在 Designer 中定義）
-            cmbArrowMode.SelectedIndex = (int)currentArrowKeyMode;
-            cmbArrowMode.SelectedIndexChanged += (s, e) =>
-            {
-                currentArrowKeyMode = (ArrowKeyMode)cmbArrowMode.SelectedIndex;
-                SaveAppSettings();
-                AddLog($"方向鍵模式切換: {currentArrowKeyMode}");
-            };
 
             // Enable KeyPreview to capture all keys
             this.KeyPreview = true;
@@ -364,7 +331,6 @@ namespace MapleStoryMacro
             lblWindowStatus.Text = "視窗: 未鎖定";
             lblWindowStatus.ForeColor = Color.Gray;
             UpdateUI();
-            UpdatePauseButtonState();
         }
 
         private void Form1_Shown(object? sender, EventArgs e)
@@ -385,7 +351,7 @@ namespace MapleStoryMacro
             hotkeyHook.Install();
 
             AddLog("應用程式已啟動");
-            AddLog($"全局熱鍵：播放={GetKeyDisplayName(playHotkey)}, 停止={GetKeyDisplayName(stopHotkey)}, 暫停={GetKeyDisplayName(pauseHotkey)}, 錄製={GetKeyDisplayName(recordHotkey)}");
+            AddLog($"全局熱鍵：播放={GetKeyDisplayName(playHotkey)}, 停止={GetKeyDisplayName(stopHotkey)}");
         }
 
         /// <summary>
@@ -578,14 +544,12 @@ namespace MapleStoryMacro
             }
 
             // 即時顯示座標位置（只在修正開關啟用時顯示）
-            if (positionCorrectionSettings.Enabled && minimapTracker != null && minimapTracker.IsCalibrated)
+            if (chkPositionCorrection.Checked && memoryScanner != null && memoryScanner.IsAttached)
             {
-                var (x, y, success) = minimapTracker.ReadPosition();
+                var (x, y, success) = memoryScanner.ReadPosition();
                 if (success)
                 {
-                    bool inBounds = minimapTracker.IsInBounds();
-                    string boundStatus = inBounds ? "✓" : "⚠";
-                    lblStatus.Text += $" | 位置: ({x}, {y}) {boundStatus}";
+                    lblStatus.Text += $" | 座標: ({x}, {y})";
                 }
             }
         }
@@ -631,31 +595,16 @@ namespace MapleStoryMacro
         {
             if (isRecording)
             {
-                // ★ 跳過全局熱鍵，不錄製進腳本
-                if (keyCode == recordHotkey || keyCode == playHotkey || keyCode == stopHotkey ||
-                    keyCode == pauseHotkey || keyCode == boundaryHotkey)
-                    return;
-
                 if (recordStartTime == 0)
                     recordStartTime = GetCurrentTime();
 
                 string eventType = isKeyDown ? "down" : "up";
 
-                // ★ 錄製時同時記錄小地圖座標
-                int rx = -1, ry = -1;
-                if (minimapTracker != null && minimapTracker.IsCalibrated)
-                {
-                    var (px, py, pOk) = minimapTracker.ReadPosition();
-                    if (pOk) { rx = px; ry = py; }
-                }
-
                 recordedEvents.Add(new MacroEvent
                 {
                     KeyCode = keyCode,
                     EventType = eventType,
-                    Timestamp = GetCurrentTime() - recordStartTime,
-                    RecordedX = rx,
-                    RecordedY = ry
+                    Timestamp = GetCurrentTime() - recordStartTime
                 });
 
                 lblRecordingStatus.Text = $"錄製中: {recordedEvents.Count} 個事件 | 最後: {keyCode}";
@@ -967,21 +916,15 @@ namespace MapleStoryMacro
                     };
 
                     // 轉換事件
-                    bool hasAnyPath = false;
                     foreach (var evt in recordedEvents)
                     {
-                        var se = new ScriptEvent
+                        scriptData.Events.Add(new ScriptEvent
                         {
                             KeyCode = (int)evt.KeyCode,
                             EventType = evt.EventType,
-                            Timestamp = evt.Timestamp,
-                            RecordedX = evt.RecordedX,
-                            RecordedY = evt.RecordedY
-                        };
-                        scriptData.Events.Add(se);
-                        if (evt.RecordedX >= 0) hasAnyPath = true;
+                            Timestamp = evt.Timestamp
+                        });
                     }
-                    scriptData.HasPathData = hasAnyPath;
 
                     // 複製自定義按鍵設定
                     for (int i = 0; i < 15; i++)
@@ -1007,8 +950,7 @@ namespace MapleStoryMacro
                     currentScriptPath = sfd.FileName;
 
                     int enabledCustomKeys = customKeySlots.Count(s => s.Enabled && s.KeyCode != Keys.None);
-                    string pathInfo = hasAnyPath ? ", 含座標路徑" : "";
-                    AddLog($"✅ 已保存: {Path.GetFileName(sfd.FileName)} ({recordedEvents.Count} 事件{pathInfo}, {enabledCustomKeys} 自定義按鍵)");
+                    AddLog($"✅ 已保存: {Path.GetFileName(sfd.FileName)} ({recordedEvents.Count} 事件, {enabledCustomKeys} 自定義按鍵)");
                 }
                 catch (Exception ex)
                 {
@@ -1057,9 +999,7 @@ namespace MapleStoryMacro
                         {
                             KeyCode = (Keys)evt.KeyCode,
                             EventType = evt.EventType,
-                            Timestamp = evt.Timestamp,
-                            RecordedX = evt.RecordedX,
-                            RecordedY = evt.RecordedY
+                            Timestamp = evt.Timestamp
                         });
                     }
 
@@ -1088,9 +1028,7 @@ namespace MapleStoryMacro
                     }
 
                     int enabledCustomKeys = customKeySlots.Count(s => s.Enabled && s.KeyCode != Keys.None);
-                    bool hasPath = recordedEvents.Any(e => e.RecordedX >= 0);
-                    string pathStr = hasPath ? ", 含座標路徑" : "";
-                    AddLog($"✅ 已載入: {Path.GetFileName(filePath)} ({recordedEvents.Count} 事件{pathStr}, {enabledCustomKeys} 自定義按鍵)");
+                    AddLog($"✅ 已載入: {Path.GetFileName(filePath)} ({recordedEvents.Count} 事件, {enabledCustomKeys} 自定義按鍵)");
                 }
                 else
                 {
@@ -1209,888 +1147,424 @@ namespace MapleStoryMacro
                 return;
             }
 
-            // 開啟摺疊式編輯器
-            OpenFoldedEventEditor();
-        }
-
-        /// <summary>
-        /// 摺疊事件結構 - 表示一個按鍵從按下到放開的完整動作
-        /// </summary>
-        private class FoldedKeyAction
-        {
-            public Keys KeyCode { get; set; }
-            public string KeyName { get; set; } = "";
-            public double PressTime { get; set; }      // 按下的時間點
-            public double ReleaseTime { get; set; }    // 放開的時間點
-            public double Duration => ReleaseTime - PressTime;  // 持續時間
-            public int RepeatCount { get; set; } = 1;  // 重複按下次數 (連打)
-            public bool IsReleased { get; set; } = true;  // 是否已放開
-
-            public string GetDisplayText()
-            {
-                string durationText = Duration >= 1.0 ? $"{Duration:F2}秒" : $"{Duration * 1000:F0}ms";
-                if (RepeatCount > 1)
-                {
-                    return $"{KeyName}  x{RepeatCount}  共{durationText}  [按下]";
-                }
-                return $"{KeyName}  {durationText}  [按下]";
-            }
-
-            public string GetReleaseText()
-            {
-                return $"{KeyName}  [放開]  @{ReleaseTime:F3}s";
-            }
-        }
-
-        /// <summary>
-        /// 將原始事件轉換為摺疊格式
-        /// </summary>
-        private List<FoldedKeyAction> ConvertToFoldedActions()
-        {
-            var actions = new List<FoldedKeyAction>();
-            var sortedEvents = recordedEvents.OrderBy(e => e.Timestamp).ToList();
-            
-            // 追蹤每個按鍵的狀態
-            var keyStates = new Dictionary<Keys, FoldedKeyAction>();
-
-            foreach (var evt in sortedEvents)
-            {
-                if (evt.EventType == "down")
-                {
-                    if (keyStates.TryGetValue(evt.KeyCode, out var existing))
-                    {
-                        // 已經在按住狀態，增加重複計數
-                        existing.RepeatCount++;
-                    }
-                    else
-                    {
-                        // 新的按下
-                        keyStates[evt.KeyCode] = new FoldedKeyAction
-                        {
-                            KeyCode = evt.KeyCode,
-                            KeyName = GetKeyDisplayName(evt.KeyCode),
-                            PressTime = evt.Timestamp,
-                            IsReleased = false,
-                            RepeatCount = 1
-                        };
-                    }
-                }
-                else if (evt.EventType == "up")
-                {
-                    if (keyStates.TryGetValue(evt.KeyCode, out var action))
-                    {
-                        action.ReleaseTime = evt.Timestamp;
-                        action.IsReleased = true;
-                        actions.Add(action);
-                        keyStates.Remove(evt.KeyCode);
-                    }
-                    else
-                    {
-                        // 沒有對應的按下事件，創建一個瞬間按下的動作
-                        actions.Add(new FoldedKeyAction
-                        {
-                            KeyCode = evt.KeyCode,
-                            KeyName = GetKeyDisplayName(evt.KeyCode),
-                            PressTime = evt.Timestamp - 0.05,
-                            ReleaseTime = evt.Timestamp,
-                            IsReleased = true
-                        });
-                    }
-                }
-            }
-
-            // 處理還沒放開的按鍵
-            double lastTime = sortedEvents.Count > 0 ? sortedEvents.Last().Timestamp : 0;
-            foreach (var kvp in keyStates)
-            {
-                kvp.Value.ReleaseTime = lastTime + 0.1;
-                kvp.Value.IsReleased = false;
-                actions.Add(kvp.Value);
-            }
-
-            return actions.OrderBy(a => a.PressTime).ToList();
-        }
-
-        /// <summary>
-        /// 從摺疊動作重建原始事件
-        /// </summary>
-        private void RebuildEventsFromActions(List<FoldedKeyAction> actions)
-        {
-            recordedEvents.Clear();
-            
-            foreach (var action in actions.OrderBy(a => a.PressTime))
-            {
-                // 添加按下事件
-                double interval = action.Duration / Math.Max(1, action.RepeatCount);
-                for (int i = 0; i < action.RepeatCount; i++)
-                {
-                    recordedEvents.Add(new MacroEvent
-                    {
-                        KeyCode = action.KeyCode,
-                        EventType = "down",
-                        Timestamp = action.PressTime + (i * interval * 0.01)
-                    });
-                }
-
-                // 添加放開事件
-                recordedEvents.Add(new MacroEvent
-                {
-                    KeyCode = action.KeyCode,
-                    EventType = "up",
-                    Timestamp = action.ReleaseTime
-                });
-            }
-        }
-
-        /// <summary>
-        /// 開啟摺疊式事件編輯器
-        /// </summary>
-        private void OpenFoldedEventEditor()
-        {
-            AddLog("正在開啟事件編輯器...");
-
-            var foldedActions = ConvertToFoldedActions();
-            
-            Form editorForm = new Form
-            {
-                Text = $"腳本編輯器 ({recordedEvents.Count} 個事件 → {foldedActions.Count} 個動作)",
-                Width = 750,
-                Height = 650,
-                StartPosition = FormStartPosition.CenterParent,
-                BackColor = Color.FromArgb(30, 30, 35),
-                ForeColor = Color.White,
-                Owner = this
-            };
-
-            // 說明標籤
-            var lblHint = new Label
-            {
-                Text = "💡 雙擊修改持續時間 | Delete 或按鈕刪除 | ➕插入按鍵 | 右側可複製/匯入 JSON",
-                Top = 10,
-                Left = 10,
-                Width = 710,
-                ForeColor = Color.Cyan,
-                Font = new Font("Microsoft JhengHei", 9)
-            };
-
-            // 左側：事件列表
-            var lstActions = new ListView
-            {
-                Top = 40,
-                Left = 10,
-                Width = 450,
-                Height = 480,
-                View = View.Details,
-                FullRowSelect = true,
-                GridLines = true,
-                BackColor = Color.FromArgb(25, 25, 30),
-                ForeColor = Color.White,
-                Font = new Font("Consolas", 10)
-            };
-            
-            lstActions.Columns.Add("按鍵", 80);
-            lstActions.Columns.Add("重複", 50);
-            lstActions.Columns.Add("持續時間", 100);
-            lstActions.Columns.Add("狀態", 60);
-            lstActions.Columns.Add("時間點", 90);
-
-            // 刷新列表的方法
-            Action refreshList = () =>
-            {
-                lstActions.Items.Clear();
-                foreach (var action in foldedActions)
-                {
-                    string duration = action.Duration >= 1.0 ? $"{action.Duration:F2}秒" : $"{action.Duration * 1000:F0}ms";
-                    var item = new ListViewItem(action.KeyName);
-                    item.SubItems.Add(action.RepeatCount > 1 ? $"x{action.RepeatCount}" : "-");
-                    item.SubItems.Add(duration);
-                    item.SubItems.Add(action.IsReleased ? "完成" : "按住中");
-                    item.SubItems.Add($"{action.PressTime:F3}s");
-                    item.Tag = action;
-                    item.ForeColor = action.IsReleased ? Color.LightGreen : Color.Orange;
-                    lstActions.Items.Add(item);
-                }
-                editorForm.Text = $"腳本編輯器 ({foldedActions.Count} 個動作)";
-            };
-            refreshList();
-
-            // 雙擊編輯持續時間
-            lstActions.DoubleClick += (s, args) =>
-            {
-                if (lstActions.SelectedItems.Count == 0) return;
-                var action = lstActions.SelectedItems[0].Tag as FoldedKeyAction;
-                if (action == null) return;
-
-                using var editForm = new Form
-                {
-                    Text = $"編輯 {action.KeyName}",
-                    Size = new Size(320, 200),
-                    StartPosition = FormStartPosition.CenterParent,
-                    FormBorderStyle = FormBorderStyle.FixedDialog,
-                    MaximizeBox = false,
-                    MinimizeBox = false,
-                    BackColor = Color.FromArgb(40, 40, 45)
-                };
-
-                var lblDur = new Label { Text = "持續時間 (秒):", Location = new Point(20, 25), AutoSize = true, ForeColor = Color.White };
-                var numDuration = new NumericUpDown
-                {
-                    Location = new Point(130, 22),
-                    Size = new Size(120, 25),
-                    Minimum = 0.01M,
-                    Maximum = 9999,
-                    DecimalPlaces = 3,
-                    Value = (decimal)Math.Max(0.01, action.Duration),
-                    Increment = 0.1M
-                };
-
-                var lblRepeat = new Label { Text = "重複次數:", Location = new Point(20, 60), AutoSize = true, ForeColor = Color.White };
-                var numRepeat = new NumericUpDown
-                {
-                    Location = new Point(130, 57),
-                    Size = new Size(80, 25),
-                    Minimum = 1,
-                    Maximum = 9999,
-                    Value = action.RepeatCount
-                };
-
-                var lblInfo = new Label
-                {
-                    Text = $"原始: {action.Duration:F3}秒, x{action.RepeatCount}",
-                    Location = new Point(20, 95),
-                    AutoSize = true,
-                    ForeColor = Color.Gray
-                };
-
-                var btnOk = new Button
-                {
-                    Text = "確定",
-                    Location = new Point(70, 125),
-                    Size = new Size(80, 30),
-                    DialogResult = DialogResult.OK,
-                    FlatStyle = FlatStyle.Flat,
-                    BackColor = Color.FromArgb(60, 140, 80),
-                    ForeColor = Color.White
-                };
-
-                var btnCancel = new Button
-                {
-                    Text = "取消",
-                    Location = new Point(160, 125),
-                    Size = new Size(80, 30),
-                    DialogResult = DialogResult.Cancel,
-                    FlatStyle = FlatStyle.Flat,
-                    BackColor = Color.FromArgb(100, 100, 100),
-                    ForeColor = Color.White
-                };
-
-                editForm.Controls.AddRange(new Control[] { lblDur, numDuration, lblRepeat, numRepeat, lblInfo, btnOk, btnCancel });
-                editForm.AcceptButton = btnOk;
-                editForm.CancelButton = btnCancel;
-
-                if (editForm.ShowDialog() == DialogResult.OK)
-                {
-                    double newDuration = (double)numDuration.Value;
-                    int newRepeat = (int)numRepeat.Value;
-                    
-                    action.ReleaseTime = action.PressTime + newDuration;
-                    action.RepeatCount = newRepeat;
-                    
-                    refreshList();
-                    AddLog($"✅ 已修改 {action.KeyName}: {newDuration:F3}秒 x{newRepeat}");
-                }
-            };
-
-            // Delete 鍵刪除
-            lstActions.KeyDown += (s, args) =>
-            {
-                if (args.KeyCode == Keys.Delete && lstActions.SelectedItems.Count > 0)
-                {
-                    var action = lstActions.SelectedItems[0].Tag as FoldedKeyAction;
-                    if (action == null) return;
-
-                    if (MessageBox.Show($"確定刪除 {action.KeyName}？", "確認", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
-                    {
-                        foldedActions.Remove(action);
-                        refreshList();
-                        AddLog($"✅ 已刪除 {action.KeyName}");
-                    }
-                }
-            };
-
-            // 右側：JSON 面板
-            var lblJson = new Label
-            {
-                Text = "📋 JSON (給 AI 用)",
-                Top = 40,
-                Left = 470,
-                AutoSize = true,
-                ForeColor = Color.White
-            };
-
-            var txtJson = new TextBox
-            {
-                Top = 65,
-                Left = 470,
-                Width = 255,
-                Height = 350,
-                Multiline = true,
-                ScrollBars = ScrollBars.Both,
-                BackColor = Color.FromArgb(20, 20, 25),
-                ForeColor = Color.LightGreen,
-                Font = new Font("Consolas", 9),
-                WordWrap = false
-            };
-
-            // 更新 JSON 顯示
-            Action updateJson = () =>
-            {
-                var jsonData = foldedActions.Select(a => new
-                {
-                    key = a.KeyName,
-                    duration = Math.Round(a.Duration, 3),
-                    repeat = a.RepeatCount,
-                    time = Math.Round(a.PressTime, 3)
-                }).ToList();
-                txtJson.Text = System.Text.Json.JsonSerializer.Serialize(jsonData, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
-            };
-            updateJson();
-
-            // 複製 JSON 按鈕
-            var btnCopyJson = new Button
-            {
-                Text = "📋 複製",
-                Top = 425,
-                Left = 470,
-                Size = new Size(75, 28),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(60, 120, 180),
-                ForeColor = Color.White
-            };
-            btnCopyJson.Click += (s, args) =>
-            {
-                updateJson();
-                Clipboard.SetText(txtJson.Text);
-                AddLog("✅ 已複製 JSON");
-                MessageBox.Show("已複製！可貼給 AI 修改。", "複製成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            };
-
-            // 匯入 JSON 按鈕
-            var btnImportJson = new Button
-            {
-                Text = "📥 匯入",
-                Top = 425,
-                Left = 555,
-                Size = new Size(75, 28),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(60, 150, 100),
-                ForeColor = Color.White
-            };
-            btnImportJson.Click += (s, args) =>
-            {
-                try
-                {
-                    var json = txtJson.Text.Trim();
-                    if (string.IsNullOrEmpty(json)) return;
-
-                    using var doc = System.Text.Json.JsonDocument.Parse(json);
-                    var newActions = new List<FoldedKeyAction>();
-                    double currentTime = 0;
-
-                    foreach (var element in doc.RootElement.EnumerateArray())
-                    {
-                        string keyName = element.GetProperty("key").GetString() ?? "A";
-                        double duration = element.TryGetProperty("duration", out var d) ? d.GetDouble() : 0.1;
-                        int repeat = element.TryGetProperty("repeat", out var r) ? r.GetInt32() : 1;
-                        double time = element.TryGetProperty("time", out var t) ? t.GetDouble() : currentTime;
-
-                        if (Enum.TryParse<Keys>(keyName, true, out Keys keyCode))
-                        {
-                            newActions.Add(new FoldedKeyAction
-                            {
-                                KeyCode = keyCode,
-                                KeyName = GetKeyDisplayName(keyCode),
-                                PressTime = time,
-                                ReleaseTime = time + duration,
-                                RepeatCount = repeat,
-                                IsReleased = true
-                            });
-                        }
-                        currentTime = time + duration + 0.01;
-                    }
-
-                    if (newActions.Count > 0)
-                    {
-                        foldedActions.Clear();
-                        foldedActions.AddRange(newActions);
-                        refreshList();
-                        AddLog($"✅ 已匯入 {newActions.Count} 個動作");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show($"JSON 格式錯誤:\n{ex.Message}", "匯入失敗", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
-            };
-
-            // 貼上按鈕
-            var btnPaste = new Button
-            {
-                Text = "📋 貼上",
-                Top = 425,
-                Left = 640,
-                Size = new Size(75, 28),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(100, 100, 120),
-                ForeColor = Color.White
-            };
-            btnPaste.Click += (s, args) =>
-            {
-                if (Clipboard.ContainsText())
-                {
-                    txtJson.Text = Clipboard.GetText();
-                }
-            };
-
-            // 底部按鈕面板
-            var btnClear = new Button
-            {
-                Text = "🗑️ 清空全部",
-                Top = 530,
-                Left = 10,
-                Size = new Size(100, 32),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(150, 60, 60),
-                ForeColor = Color.White
-            };
-            btnClear.Click += (s, args) =>
-            {
-                if (MessageBox.Show($"確定清空全部 {foldedActions.Count} 個動作？", "確認", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
-                {
-                    foldedActions.Clear();
-                    refreshList();
-                    updateJson();
-                    AddLog("✅ 已清空所有動作");
-                }
-            };
-
-            // ★ 插入按鍵按鈕
-            var btnInsert = new Button
-            {
-                Text = "➕ 插入按鍵",
-                Top = 530,
-                Left = 120,
-                Size = new Size(100, 32),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(80, 120, 180),
-                ForeColor = Color.White
-            };
-
-            // ★ 刪除選取按鈕
-            var btnDelete = new Button
-            {
-                Text = "🗑️ 刪除選取",
-                Top = 530,
-                Left = 228,
-                Size = new Size(100, 32),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(180, 80, 60),
-                ForeColor = Color.White
-            };
-            btnDelete.Click += (s, args) =>
-            {
-                if (lstActions.SelectedItems.Count == 0) { MessageBox.Show("請先選取要刪除的動作"); return; }
-                var action = lstActions.SelectedItems[0].Tag as FoldedKeyAction;
-                if (action == null) return;
-                if (MessageBox.Show($"確定刪除 {action.KeyName}？", "確認", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
-                {
-                    foldedActions.Remove(action);
-                    refreshList();
-                    updateJson();
-                    AddLog($"✅ 已刪除 {action.KeyName}");
-                }
-            };
-            btnInsert.Click += (s, args) =>
-            {
-                using var insertForm = new Form
-                {
-                    Text = "插入按鍵事件",
-                    Size = new Size(350, 280),
-                    StartPosition = FormStartPosition.CenterParent,
-                    FormBorderStyle = FormBorderStyle.FixedDialog,
-                    MaximizeBox = false, MinimizeBox = false,
-                    BackColor = Color.FromArgb(40, 40, 45),
-                    KeyPreview = true
-                };
-
-                var lblKey = new Label { Text = "按鍵（點擊框後按鍵）:", Location = new Point(20, 20), AutoSize = true, ForeColor = Color.White };
-                var txtKey = new TextBox
-                {
-                    Location = new Point(20, 45), Size = new Size(290, 25),
-                    BackColor = Color.FromArgb(55, 55, 60), ForeColor = Color.Yellow,
-                    Text = "點擊後按下按鍵...", Tag = (Keys?)null, Cursor = Cursors.Arrow
-                };
-                txtKey.Click += (ts, te) => { txtKey.Text = "按下按鍵..."; txtKey.ForeColor = Color.Yellow; };
-                insertForm.KeyDown += (ts, te) =>
-                {
-                    if (txtKey.Focused || txtKey.ForeColor == Color.Yellow)
-                    {
-                        te.Handled = true; te.SuppressKeyPress = true;
-                        txtKey.Tag = (Keys?)te.KeyCode;
-                        txtKey.Text = te.KeyCode.ToString();
-                        txtKey.ForeColor = Color.White;
-                    }
-                };
-
-                var lblDur = new Label { Text = "持續時間(秒):", Location = new Point(20, 80), AutoSize = true, ForeColor = Color.White };
-                var numDur = new NumericUpDown { Location = new Point(130, 77), Size = new Size(100, 25), Minimum = 0.01M, Maximum = 9999, DecimalPlaces = 3, Value = 0.1M, Increment = 0.05M };
-
-                var lblRepeat = new Label { Text = "重複次數:", Location = new Point(20, 115), AutoSize = true, ForeColor = Color.White };
-                var numRepeat = new NumericUpDown { Location = new Point(130, 112), Size = new Size(80, 25), Minimum = 1, Maximum = 9999, Value = 1 };
-
-                var lblPos = new Label { Text = "插入位置:", Location = new Point(20, 150), AutoSize = true, ForeColor = Color.White };
-                var rdoAfter = new RadioButton { Text = "選取項目之後", Location = new Point(130, 148), AutoSize = true, ForeColor = Color.LightGray, Checked = true };
-                var rdoEnd = new RadioButton { Text = "末尾", Location = new Point(260, 148), AutoSize = true, ForeColor = Color.LightGray };
-
-                var btnOk = new Button { Text = "插入", Location = new Point(120, 190), Size = new Size(80, 30), BackColor = Color.FromArgb(50, 150, 80), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
-                var btnCn = new Button { Text = "取消", Location = new Point(210, 190), Size = new Size(80, 30), BackColor = Color.FromArgb(100, 100, 100), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
-
-                btnOk.Click += (ts, te) =>
-                {
-                    if (txtKey.Tag == null) { MessageBox.Show("請先按下要插入的按鍵"); return; }
-                    Keys key = (Keys)txtKey.Tag;
-                    double duration = (double)numDur.Value;
-                    int repeat = (int)numRepeat.Value;
-
-                    // 計算插入位置的時間點
-                    double insertTime;
-                    int insertIndex;
-                    if (rdoAfter.Checked && lstActions.SelectedItems.Count > 0)
-                    {
-                        var selAction = lstActions.SelectedItems[0].Tag as FoldedKeyAction;
-                        insertIndex = foldedActions.IndexOf(selAction!) + 1;
-                        insertTime = selAction!.ReleaseTime + 0.01;
-                    }
-                    else
-                    {
-                        insertIndex = foldedActions.Count;
-                        insertTime = foldedActions.Count > 0 ? foldedActions.Last().ReleaseTime + 0.01 : 0;
-                    }
-
-                    var newAction = new FoldedKeyAction
-                    {
-                        KeyCode = key,
-                        KeyName = key.ToString(),
-                        PressTime = insertTime,
-                        ReleaseTime = insertTime + duration,
-                        RepeatCount = repeat,
-                        IsReleased = true
-                    };
-
-                    foldedActions.Insert(insertIndex, newAction);
-                    refreshList();
-                    updateJson();
-                    AddLog($"✅ 已插入 {key} (持續{duration}s x{repeat})");
-                    insertForm.Close();
-                };
-                btnCn.Click += (ts, te) => insertForm.Close();
-
-                insertForm.Controls.AddRange(new Control[] { lblKey, txtKey, lblDur, numDur, lblRepeat, numRepeat, lblPos, rdoAfter, rdoEnd, btnOk, btnCn });
-                insertForm.ShowDialog();
-            };
-
-            var btnSave = new Button
-            {
-                Text = "💾 儲存並關閉",
-                Top = 530,
-                Left = 510,
-                Size = new Size(120, 32),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(50, 150, 80),
-                ForeColor = Color.White
-            };
-            btnSave.Click += (s, args) =>
-            {
-                RebuildEventsFromActions(foldedActions);
-                lblRecordingStatus.Text = $"已編輯 | 事件數: {recordedEvents.Count}";
-                AddLog($"✅ 已儲存 {recordedEvents.Count} 個事件");
-                editorForm.DialogResult = DialogResult.OK;
-                editorForm.Close();
-            };
-
-            var btnCancel = new Button
-            {
-                Text = "取消",
-                Top = 530,
-                Left = 640,
-                Size = new Size(80, 32),
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(100, 100, 100),
-                ForeColor = Color.White
-            };
-            btnCancel.Click += (s, args) =>
-            {
-                editorForm.DialogResult = DialogResult.Cancel;
-                editorForm.Close();
-            };
-
-            // 狀態標籤
-            var lblStatus = new Label
-            {
-                Text = $"動作數: {foldedActions.Count}",
-                Top = 538,
-                Left = 338,
-                AutoSize = true,
-                ForeColor = Color.Cyan
-            };
-
-            // 監聽列表選擇變化來更新 JSON
-            lstActions.SelectedIndexChanged += (s, args) => updateJson();
-
-            editorForm.Controls.AddRange(new Control[] {
-                lblHint, lstActions,
-                lblJson, txtJson, btnCopyJson, btnImportJson, btnPaste,
-                btnClear, btnInsert, btnDelete, btnSave, btnCancel, lblStatus
-            });
-
-            editorForm.ShowDialog();
-            UpdateUI();
-        }
-
-        /// <summary>
-        /// 開啟文本編輯器（原有功能）
-        /// </summary>
-        private void OpenTextEditor()
-        {
-            AddLog("正在開啟文本編輯器...");
+            AddLog("正在開啟編輯器...");
 
             Form editorForm = new Form
             {
-                Text = $"腳本編輯器 ({recordedEvents.Count} 個事件)",
-                Width = 800,
-                Height = 700,
+                Text = $"編輯腳本 ({recordedEvents.Count} 個事件)",
+                Width = 900,
+                Height = 620,
                 StartPosition = FormStartPosition.CenterParent,
                 Owner = this
             };
 
-            // 說明標籤
+            // 提示標籤
             Label hintLabel = new Label
             {
-                Text = "格式: 按鍵名稱 | 類型(down/up) | 時間戳(秒)    每行一個事件，可直接編輯、複製、貼上",
+                Text = "★ 雙擊折疊/展開同類事件 | 選中「按鍵」欄後按鍵更改 | F2 編輯間隔",
                 Top = 10,
                 Left = 10,
-                Width = 760,
-                ForeColor = Color.Blue,
-                Font = new Font("Microsoft JhengHei", 9, FontStyle.Bold)
+                Width = 860,
+                ForeColor = Color.Blue
             };
-
-            // 文本編輯區
-            RichTextBox txtEditor = new RichTextBox
-            {
-                Top = 35,
-                Left = 10,
-                Width = 760,
-                Height = 520,
-                Font = new Font("Consolas", 10),
-                AcceptsTab = false,
-                WordWrap = false,
-                ScrollBars = RichTextBoxScrollBars.Both
-            };
-
-            // 將事件轉換為文本格式
-            var sb = new StringBuilder();
-            sb.AppendLine("# ===== 腳本事件列表 =====");
-            sb.AppendLine("# 格式: 按鍵名稱 | 類型 | 時間戳(秒)");
-            sb.AppendLine("# 支援的類型: down (按下), up (放開)");
-            sb.AppendLine("# 以 # 開頭的行為註解，會被忽略");
-            sb.AppendLine("# ========================");
-            sb.AppendLine();
-
-            foreach (var evt in recordedEvents)
-            {
-                string keyName = evt.KeyCode.ToString();
-                sb.AppendLine($"{keyName} | {evt.EventType} | {evt.Timestamp:F3}");
-            }
-
-            txtEditor.Text = sb.ToString();
 
             // 標記是否有未儲存的變更
             bool hasUnsavedChanges = false;
-            txtEditor.TextChanged += (s, args) => { hasUnsavedChanges = true; };
 
-            // 按鈕面板
+            // 建立事件的編輯副本
+            var editEvents = recordedEvents.Select(ev => new MacroEvent
+            {
+                KeyCode = ev.KeyCode,
+                EventType = ev.EventType,
+                Timestamp = ev.Timestamp
+            }).ToList();
+
+            // ===== 分組邏輯：連續相同按鍵+相同類型歸為一組 =====
+            // groupStarts[i] = 第 i 組在 editEvents 中的起始索引
+            // groupCounts[i] = 第 i 組的事件數量
+            var groupStarts = new List<int>();
+            var groupCounts = new List<int>();
+            var expandedGroups = new HashSet<int>(); // 已展開的組別索引
+
+            Action rebuildGroups = () =>
+            {
+                groupStarts.Clear();
+                groupCounts.Clear();
+                expandedGroups.Clear();
+                int i = 0;
+                while (i < editEvents.Count)
+                {
+                    int start = i;
+                    var key = editEvents[i].KeyCode;
+                    var type = editEvents[i].EventType;
+                    while (i < editEvents.Count && editEvents[i].KeyCode == key && editEvents[i].EventType == type)
+                        i++;
+                    groupStarts.Add(start);
+                    groupCounts.Add(i - start);
+                }
+            };
+            rebuildGroups();
+
+            DataGridView dgv = new DataGridView
+            {
+                Top = 35,
+                Left = 10,
+                Width = 860,
+                Height = 470,
+                AllowUserToAddRows = false,
+                AllowUserToDeleteRows = false,
+                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+                SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+                EditMode = DataGridViewEditMode.EditOnF2
+            };
+
+            dgv.Columns.AddRange(new DataGridViewColumn[]
+            {
+                new DataGridViewTextBoxColumn
+                {
+                    Name = "Index", HeaderText = "#", ReadOnly = true, FillWeight = 8
+                },
+                new DataGridViewTextBoxColumn
+                {
+                    Name = "KeyCode", HeaderText = "按鍵 (選中後按鍵更改)", ReadOnly = true, FillWeight = 28
+                },
+                new DataGridViewTextBoxColumn
+                {
+                    Name = "EventType", HeaderText = "類型", ReadOnly = true, FillWeight = 12
+                },
+                new DataGridViewTextBoxColumn
+                {
+                    Name = "Timestamp", HeaderText = "間隔 (秒)", FillWeight = 25,
+                    DefaultCellStyle = new DataGridViewCellStyle { BackColor = Color.FromArgb(240, 248, 255) }
+                },
+                new DataGridViewTextBoxColumn
+                {
+                    Name = "Count", HeaderText = "數量", ReadOnly = true, FillWeight = 8,
+                    DefaultCellStyle = new DataGridViewCellStyle
+                    {
+                        ForeColor = Color.DarkBlue,
+                        Alignment = DataGridViewContentAlignment.MiddleCenter
+                    }
+                }
+            });
+
+            // Row.Tag 格式：int[] { groupIdx, eventIdx }
+            //   eventIdx == -1 表示折疊的群組標題列
+            //   eventIdx >= 0 表示 editEvents 中的實際索引
+
+            // 刷新所有列（根據分組與展開狀態）
+            Action refreshRows = () =>
+            {
+                dgv.SuspendLayout();
+                dgv.Rows.Clear();
+
+                for (int gi = 0; gi < groupStarts.Count; gi++)
+                {
+                    int start = groupStarts[gi];
+                    int count = groupCounts[gi];
+                    bool isSingle = count == 1;
+                    bool isExpanded = expandedGroups.Contains(gi);
+
+                    if (isSingle)
+                    {
+                        // 單一事件：直接顯示（間隔 = 與前一事件的時間差）
+                        var evt = editEvents[start];
+                        string keyName = GetKeyDisplayName(evt.KeyCode);
+                        string eventType = evt.EventType == "down" ? "▼ 按下" : "▲ 放開";
+                        double evtDelta = start == 0 ? evt.Timestamp : evt.Timestamp - editEvents[start - 1].Timestamp;
+
+                        int ri = dgv.Rows.Add((start + 1).ToString(), keyName, eventType, evtDelta.ToString("F3"), "");
+                        dgv.Rows[ri].Tag = new int[] { gi, start };
+                        dgv.Rows[ri].Cells["Timestamp"].ReadOnly = false;
+
+                        if (evt.EventType == "up")
+                            dgv.Rows[ri].DefaultCellStyle.BackColor = Color.FromArgb(255, 250, 243);
+                    }
+                    else if (isExpanded)
+                    {
+                        // 展開的群組：顯示標題列 + 所有子事件
+                        var firstEvt = editEvents[start];
+                        string headerKey = $"▾ {GetKeyDisplayName(firstEvt.KeyCode)}";
+                        string headerType = firstEvt.EventType == "down" ? "▼ 按下" : "▲ 放開";
+
+                        // 標題列顯示所有子事件間隔的總和
+                        double groupTotal = 0;
+                        for (int j = 0; j < count; j++)
+                        {
+                            int ei2 = start + j;
+                            groupTotal += ei2 == 0 ? editEvents[ei2].Timestamp : editEvents[ei2].Timestamp - editEvents[ei2 - 1].Timestamp;
+                        }
+
+                        int hri = dgv.Rows.Add("", headerKey, headerType, groupTotal.ToString("F3"), $"×{count}");
+                        dgv.Rows[hri].Tag = new int[] { gi, -1 };
+                        dgv.Rows[hri].Cells["Timestamp"].ReadOnly = true;
+                        dgv.Rows[hri].DefaultCellStyle.BackColor = firstEvt.EventType == "down"
+                            ? Color.FromArgb(218, 230, 248) : Color.FromArgb(248, 232, 218);
+                        dgv.Rows[hri].DefaultCellStyle.Font = new Font(dgv.Font, FontStyle.Bold);
+
+                        // 子事件列
+                        for (int j = 0; j < count; j++)
+                        {
+                            int ei = start + j;
+                            var evt = editEvents[ei];
+                            string childKey = $"    {GetKeyDisplayName(evt.KeyCode)}";
+                            string childType = evt.EventType == "down" ? "▼ 按下" : "▲ 放開";
+                            double childDelta = ei == 0 ? evt.Timestamp : evt.Timestamp - editEvents[ei - 1].Timestamp;
+
+                            int cri = dgv.Rows.Add((ei + 1).ToString(), childKey, childType, childDelta.ToString("F3"), "");
+                            dgv.Rows[cri].Tag = new int[] { gi, ei };
+                            dgv.Rows[cri].Cells["Timestamp"].ReadOnly = false;
+
+                            if (evt.EventType == "up")
+                                dgv.Rows[cri].DefaultCellStyle.BackColor = Color.FromArgb(255, 250, 243);
+                        }
+                    }
+                    else
+                    {
+                        // 折疊的群組：只顯示標題列（間隔 = 所有子事件間隔的總和）
+                        var firstEvt = editEvents[start];
+                        string headerKey = $"▸ {GetKeyDisplayName(firstEvt.KeyCode)}";
+                        string headerType = firstEvt.EventType == "down" ? "▼ 按下" : "▲ 放開";
+
+                        double groupTotal = 0;
+                        for (int j = 0; j < count; j++)
+                        {
+                            int ei = start + j;
+                            groupTotal += ei == 0 ? editEvents[ei].Timestamp : editEvents[ei].Timestamp - editEvents[ei - 1].Timestamp;
+                        }
+
+                        int ri = dgv.Rows.Add("", headerKey, headerType, groupTotal.ToString("F3"), $"×{count}");
+                        dgv.Rows[ri].Tag = new int[] { gi, -1 };
+                        dgv.Rows[ri].Cells["Timestamp"].ReadOnly = true;
+                        dgv.Rows[ri].DefaultCellStyle.BackColor = firstEvt.EventType == "down"
+                            ? Color.FromArgb(225, 235, 250) : Color.FromArgb(250, 238, 225);
+                        dgv.Rows[ri].DefaultCellStyle.Font = new Font(dgv.Font, FontStyle.Bold);
+                    }
+                }
+
+                dgv.ResumeLayout();
+            };
+            refreshRows();
+
+            // 雙擊切換折疊/展開
+            dgv.CellDoubleClick += (s, args) =>
+            {
+                if (args.RowIndex < 0 || args.RowIndex >= dgv.Rows.Count) return;
+                // 雙擊時間欄位時不切換（讓使用者編輯）
+                if (args.ColumnIndex == dgv.Columns["Timestamp"]!.Index) return;
+
+                if (dgv.Rows[args.RowIndex].Tag is int[] tag && tag.Length == 2)
+                {
+                    int gi = tag[0];
+                    if (gi < groupStarts.Count && groupCounts[gi] > 1)
+                    {
+                        if (expandedGroups.Contains(gi))
+                            expandedGroups.Remove(gi);
+                        else
+                            expandedGroups.Add(gi);
+                        refreshRows();
+                    }
+                }
+            };
+
+            // 攔截延伸鍵（方向鍵等），讓按鍵欄能捕獲
+            dgv.PreviewKeyDown += (s, args) =>
+            {
+                if (dgv.CurrentCell?.ColumnIndex == dgv.Columns["KeyCode"]!.Index)
+                {
+                    args.IsInputKey = true;
+                }
+            };
+
+            // 按鍵感應：選中按鍵欄後按下按鍵即可更改
+            dgv.KeyDown += (s, args) =>
+            {
+                if (dgv.CurrentCell?.ColumnIndex != dgv.Columns["KeyCode"]!.Index)
+                    return;
+                if (dgv.SelectedRows.Count == 0) return;
+
+                args.Handled = true;
+                args.SuppressKeyPress = true;
+
+                Keys newKey = args.KeyCode;
+
+                foreach (DataGridViewRow row in dgv.SelectedRows)
+                {
+                    if (row.Tag is int[] tag && tag.Length == 2)
+                    {
+                        int gi = tag[0], ei = tag[1];
+                        if (ei == -1)
+                        {
+                            // 群組標題：更改整組所有事件
+                            int gStart = groupStarts[gi];
+                            int gCount = groupCounts[gi];
+                            for (int j = 0; j < gCount; j++)
+                                editEvents[gStart + j].KeyCode = newKey;
+                        }
+                        else
+                        {
+                            // 單一事件
+                            editEvents[ei].KeyCode = newKey;
+                        }
+                        hasUnsavedChanges = true;
+                    }
+                }
+
+                // 按鍵可能改變分組結構，重建
+                rebuildGroups();
+                refreshRows();
+            };
+
+            // 驗證時間欄位
+            dgv.CellValidating += (s, args) =>
+            {
+                if (dgv.Columns[args.ColumnIndex].Name != "Timestamp") return;
+                if (dgv.Rows[args.RowIndex].Cells["Timestamp"].ReadOnly) return;
+
+                string value = args.FormattedValue?.ToString() ?? "";
+                if (!string.IsNullOrEmpty(value) && !double.TryParse(value, out _))
+                {
+                    args.Cancel = true;
+                    dgv.CancelEdit();
+                    MessageBox.Show("請輸入有效的數字！", "輸入錯誤", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+                else if (double.TryParse(value, out double ts) && ts < 0)
+                {
+                    args.Cancel = true;
+                    dgv.CancelEdit();
+                    MessageBox.Show("間隔不能為負數！", "輸入錯誤", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            };
+
+            // 時間修改後更新
+            dgv.CellValueChanged += (s, args) =>
+            {
+                if (args.RowIndex < 0 || args.RowIndex >= dgv.Rows.Count) return;
+                if (dgv.Columns[args.ColumnIndex].Name != "Timestamp") return;
+
+                if (dgv.Rows[args.RowIndex].Tag is int[] tag && tag.Length == 2 && tag[1] >= 0)
+                {
+                    int ei = tag[1];
+                    string value = dgv.Rows[args.RowIndex].Cells["Timestamp"].Value?.ToString() ?? "0";
+                    if (double.TryParse(value, out double newDelta) && ei < editEvents.Count)
+                    {
+                        // 使用者輸入的是間隔（delta），轉換回絕對時間戳
+                        double prevTs = ei == 0 ? 0 : editEvents[ei - 1].Timestamp;
+                        editEvents[ei].Timestamp = prevTs + newDelta;
+                        hasUnsavedChanges = true;
+
+                        // 更新後續事件的絕對時間戳（保持原始間隔不變）
+                        for (int subsequent = ei + 1; subsequent < editEvents.Count; subsequent++)
+                        {
+                            // 後續事件不需要調整，因為它們的絕對時間戳是獨立的
+                            // 只有當前事件的絕對時間改變
+                            break;
+                        }
+
+                        refreshRows();
+                    }
+                }
+            };
+
             Panel btnPanel = new Panel
             {
-                Top = 565,
+                Top = 515,
                 Left = 10,
-                Width = 760,
-                Height = 90,
+                Width = 860,
+                Height = 50,
                 BorderStyle = BorderStyle.FixedSingle
             };
 
-            Button parseBtn = new Button { Text = "📋 解析預覽", Width = 100, Height = 30, Left = 10, Top = 10 };
+            Button deleteBtn = new Button { Text = "刪除選中", Width = 100, Height = 30, Left = 10, Top = 10 };
+            Button expandAllBtn = new Button { Text = "全部展開", Width = 85, Height = 30, Left = 340, Top = 10 };
+            Button collapseAllBtn = new Button { Text = "全部折疊", Width = 85, Height = 30, Left = 430, Top = 10 };
             Button saveBtn = new Button { Text = "💾 儲存", Width = 100, Height = 30, Left = 120, Top = 10, ForeColor = Color.Green };
             Button closeBtn = new Button { Text = "關閉", Width = 100, Height = 30, Left = 230, Top = 10 };
-            Button insertDownUpBtn = new Button { Text = "插入 按下+放開", Width = 120, Height = 30, Left = 340, Top = 10 };
-            Button clearBtn = new Button { Text = "清空", Width = 80, Height = 30, Left = 470, Top = 10, ForeColor = Color.Red };
 
-            Label statusLabel = new Label
+            Label infoLabel = new Label
             {
-                Text = $"目前事件數: {recordedEvents.Count}",
-                Left = 560,
+                Text = $"事件: {editEvents.Count} | 群組: {groupStarts.Count}",
+                Left = 530,
                 Top = 15,
-                Width = 190,
+                Width = 320,
                 ForeColor = Color.Gray
             };
 
-            // 快捷按鍵提示
-            Label shortcutLabel = new Label
+            expandAllBtn.Click += (s, args) =>
             {
-                Text = "常用按鍵名稱: A-Z, D0-D9, F1-F12, Space, Enter, Left, Right, Up, Down, LShiftKey, LControlKey, LMenu(Alt)",
-                Left = 10,
-                Top = 50,
-                Width = 740,
-                ForeColor = Color.DarkGray,
-                Font = new Font("Microsoft JhengHei", 8)
+                for (int gi = 0; gi < groupStarts.Count; gi++)
+                {
+                    if (groupCounts[gi] > 1)
+                        expandedGroups.Add(gi);
+                }
+                refreshRows();
             };
 
-            // 解析文本的函數
-            Func<string, List<MacroEvent>?> ParseScript = (text) =>
+            collapseAllBtn.Click += (s, args) =>
             {
-                var events = new List<MacroEvent>();
-                var lines = text.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-                int lineNum = 0;
-
-                foreach (var rawLine in lines)
-                {
-                    lineNum++;
-                    var line = rawLine.Trim();
-
-                    // 跳過空行和註解
-                    if (string.IsNullOrEmpty(line) || line.StartsWith("#"))
-                        continue;
-
-                    // 解析格式: 按鍵名稱 | 類型 | 時間戳
-                    var parts = line.Split('|');
-                    if (parts.Length != 3)
-                    {
-                        MessageBox.Show($"第 {lineNum} 行格式錯誤:\n{line}\n\n正確格式: 按鍵名稱 | 類型 | 時間戳",
-                            "解析錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        return null;
-                    }
-
-                    string keyName = parts[0].Trim();
-                    string eventType = parts[1].Trim().ToLower();
-                    string timestampStr = parts[2].Trim();
-
-                    // 解析按鍵
-                    if (!Enum.TryParse<Keys>(keyName, true, out Keys keyCode))
-                    {
-                        MessageBox.Show($"第 {lineNum} 行按鍵名稱無效: {keyName}\n\n常用名稱: A-Z, D0-D9, F1-F12, Space, Enter, Left, Right, Up, Down",
-                            "解析錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        return null;
-                    }
-
-                    // 驗證事件類型
-                    if (eventType != "down" && eventType != "up")
-                    {
-                        MessageBox.Show($"第 {lineNum} 行事件類型無效: {eventType}\n\n有效類型: down, up",
-                            "解析錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        return null;
-                    }
-
-                    // 解析時間戳
-                    if (!double.TryParse(timestampStr, out double timestamp) || timestamp < 0)
-                    {
-                        MessageBox.Show($"第 {lineNum} 行時間戳無效: {timestampStr}\n\n必須是非負數字",
-                            "解析錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        return null;
-                    }
-
-                    events.Add(new MacroEvent
-                    {
-                        KeyCode = keyCode,
-                        EventType = eventType,
-                        Timestamp = timestamp
-                    });
-                }
-
-                return events;
+                expandedGroups.Clear();
+                refreshRows();
             };
 
-            // 解析預覽按鈕
-            parseBtn.Click += (s, args) =>
+            deleteBtn.Click += (s, args) =>
             {
-                var events = ParseScript(txtEditor.Text);
-                if (events != null)
+                if (dgv.SelectedRows.Count == 0) return;
+
+                var indicesToRemove = new HashSet<int>();
+                foreach (DataGridViewRow row in dgv.SelectedRows)
                 {
-                    statusLabel.Text = $"✅ 解析成功: {events.Count} 個事件";
-                    statusLabel.ForeColor = Color.Green;
-                    MessageBox.Show($"解析成功！\n共 {events.Count} 個事件。\n\n點擊「儲存」套用變更。",
-                        "解析成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    if (row.Tag is int[] tag && tag.Length == 2)
+                    {
+                        int gi = tag[0], ei = tag[1];
+                        if (ei == -1)
+                        {
+                            // 群組標題：刪除整組
+                            int gStart = groupStarts[gi];
+                            int gCount = groupCounts[gi];
+                            for (int j = 0; j < gCount; j++)
+                                indicesToRemove.Add(gStart + j);
+                        }
+                        else
+                        {
+                            indicesToRemove.Add(ei);
+                        }
+                    }
                 }
-                else
+
+                if (indicesToRemove.Count == 0) return;
+
+                // 從後往前刪除
+                foreach (int idx in indicesToRemove.OrderByDescending(x => x))
                 {
-                    statusLabel.Text = "❌ 解析失敗";
-                    statusLabel.ForeColor = Color.Red;
+                    editEvents.RemoveAt(idx);
                 }
+
+                hasUnsavedChanges = true;
+                rebuildGroups();
+                refreshRows();
+                infoLabel.Text = $"事件: {editEvents.Count} | 群組: {groupStarts.Count}";
+                AddLog($"✅ 已刪除 {indicesToRemove.Count} 個事件");
             };
 
-            // 儲存按鈕
             saveBtn.Click += (s, args) =>
             {
-                var events = ParseScript(txtEditor.Text);
-                if (events == null) return;
-
-                if (events.Count == 0)
-                {
-                    MessageBox.Show("腳本中沒有有效的事件！", "警告", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return;
-                }
-
-                // 按時間戳排序
-                events.Sort((a, b) => a.Timestamp.CompareTo(b.Timestamp));
-
                 recordedEvents.Clear();
-                recordedEvents.AddRange(events);
+                recordedEvents.AddRange(editEvents.Select(ev => new MacroEvent
+                {
+                    KeyCode = ev.KeyCode,
+                    EventType = ev.EventType,
+                    Timestamp = ev.Timestamp
+                }));
+
+                recordedEvents.Sort((a, b) => a.Timestamp.CompareTo(b.Timestamp));
 
                 hasUnsavedChanges = false;
                 lblRecordingStatus.Text = $"已編輯 | 事件數: {recordedEvents.Count}";
-                statusLabel.Text = $"✅ 已儲存: {recordedEvents.Count} 個事件";
-                statusLabel.ForeColor = Color.Green;
+                infoLabel.Text = $"事件: {editEvents.Count} | 群組: {groupStarts.Count}";
                 AddLog($"✅ 已儲存編輯 ({recordedEvents.Count} 個事件)");
                 MessageBox.Show($"已儲存！共 {recordedEvents.Count} 個事件。", "儲存成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
             };
 
-            // 插入按下+放開按鈕
-            insertDownUpBtn.Click += (s, args) =>
-            {
-                // 取得最後一個時間戳
-                double lastTimestamp = 0;
-                var events = ParseScript(txtEditor.Text);
-                if (events != null && events.Count > 0)
-                {
-                    lastTimestamp = events.Max(e => e.Timestamp);
-                }
-
-                string template = $"\n# 在此輸入按鍵名稱 (例如: A, Space, F1)\nA | down | {(lastTimestamp + 0.1):F3}\nA | up | {(lastTimestamp + 0.15):F3}";
-                txtEditor.AppendText(template);
-                txtEditor.SelectionStart = txtEditor.Text.Length;
-                txtEditor.ScrollToCaret();
-            };
-
-            // 清空按鈕
-            clearBtn.Click += (s, args) =>
-            {
-                var result = MessageBox.Show("確定要清空所有內容嗎？", "確認清空",
-                    MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
-                if (result == DialogResult.Yes)
-                {
-                    txtEditor.Text = "# ===== 腳本事件列表 =====\n# 格式: 按鍵名稱 | 類型 | 時間戳(秒)\n# ========================\n\n";
-                }
-            };
-
-            // 關閉按鈕
             closeBtn.Click += (s, args) =>
             {
                 if (hasUnsavedChanges)
@@ -2100,8 +1574,7 @@ namespace MapleStoryMacro
                     if (result == DialogResult.Yes)
                     {
                         saveBtn.PerformClick();
-                        if (!hasUnsavedChanges) // 儲存成功才關閉
-                            editorForm.Close();
+                        editorForm.Close();
                     }
                     else if (result == DialogResult.No)
                     {
@@ -2114,16 +1587,15 @@ namespace MapleStoryMacro
                 }
             };
 
-            btnPanel.Controls.Add(parseBtn);
+            btnPanel.Controls.Add(deleteBtn);
             btnPanel.Controls.Add(saveBtn);
             btnPanel.Controls.Add(closeBtn);
-            btnPanel.Controls.Add(insertDownUpBtn);
-            btnPanel.Controls.Add(clearBtn);
-            btnPanel.Controls.Add(statusLabel);
-            btnPanel.Controls.Add(shortcutLabel);
+            btnPanel.Controls.Add(expandAllBtn);
+            btnPanel.Controls.Add(collapseAllBtn);
+            btnPanel.Controls.Add(infoLabel);
 
             editorForm.Controls.Add(hintLabel);
-            editorForm.Controls.Add(txtEditor);
+            editorForm.Controls.Add(dgv);
             editorForm.Controls.Add(btnPanel);
 
             editorForm.ShowDialog();
@@ -2331,7 +1803,6 @@ namespace MapleStoryMacro
             }
 
             UpdateUI();
-            UpdatePauseButtonState();
         }
 
         private void PlaybackThread(int loopCount, List<MacroEvent> events)
@@ -2344,50 +1815,23 @@ namespace MapleStoryMacro
 
                 for (int loop = 1; loop <= loopCount && isPlaying; loop++)
                 {
-                    // 檢查暫停狀態
-                    CheckPauseState();
-
-                    if (!isPlaying) break;
-
                     statistics.IncrementLoop();
 
-                    // ★ 每次循環開始時檢查設定是否變更，即時套用（不重建修正器）
-                    if (_correctionSettingsChanged)
-                    {
-                        _correctionSettingsChanged = false;
-                        if (positionCorrector != null)
-                        {
-                            ApplyCorrectorSettings(positionCorrector);
-                        }
-                        this.BeginInvoke(new Action(() => AddLog("🔄 位置修正設定已套用")));
-                    }
-
-                    // ★ 重設循環修正計數
-                    if (positionCorrector != null)
-                        positionCorrector.ResetLoopCorrectionCount();
-
-                    if (!isPlaying) break;
-
-                    int currentLoopNum = loop;
+                    int currentLoop = loop; // 避免閉包捕獲迴圈變數
                     this.BeginInvoke(new Action(() =>
                     {
-                        lblPlaybackStatus.Text = $"循環: {currentLoopNum}/{loopCount}";
+                        lblPlaybackStatus.Text = $"循環: {currentLoop}/{loopCount}";
                         lblPlaybackStatus.ForeColor = Color.Blue;
-                        if (currentLoopNum == 1 || currentLoopNum % 10 == 0)
-                            AddLog($"循環 {currentLoopNum}/{loopCount} 開始");
+                        if (currentLoop == 1 || currentLoop % 10 == 0)
+                            AddLog($"循環 {currentLoop}/{loopCount} 開始");
                     }));
 
                     double lastTimestamp = 0;
                     long loopStartTick = Stopwatch.GetTimestamp();
                     long lastCustomKeyCheckTick = loopStartTick;
-                    long lastCorrectionCheckTick = loopStartTick; // ★ 位置修正檢測計時
-                    long lastDriftTrackTick = loopStartTick;      // ★ 漂移追蹤節流計時
 
                     foreach (MacroEvent evt in events)
                     {
-                        // 檢查暫停狀態
-                        CheckPauseState();
-
                         if (!isPlaying) break;
 
                         double waitTime = evt.Timestamp - lastTimestamp;
@@ -2422,9 +1866,6 @@ namespace MapleStoryMacro
 
                             while (isPlaying)
                             {
-                                // 檢查暫停狀態
-                                CheckPauseState();
-
                                 double elapsedSeconds = Stopwatch.GetElapsedTime(waitStartTick).TotalSeconds;
                                 double remaining = waitSeconds - elapsedSeconds;
 
@@ -2437,52 +1878,6 @@ namespace MapleStoryMacro
                                     lastCustomKeyCheckTick = Stopwatch.GetTimestamp();
                                     double currentScriptTime = Stopwatch.GetElapsedTime(loopStartTick).TotalSeconds;
                                     CheckAndTriggerCustomKeys(currentScriptTime);
-                                }
-
-                                // ★ 定期位置修正檢查（每 N 秒檢查一次是否偏離腳本位置）
-                                if (positionCorrectionSettings.Enabled && minimapTracker != null && minimapTracker.IsCalibrated
-                                    && positionCorrectionSettings.CorrectionCheckIntervalSec > 0)
-                                {
-                                    // ★ 即時套用設定變更（不中斷腳本）
-                                    if (_correctionSettingsChanged)
-                                    {
-                                        _correctionSettingsChanged = false;
-                                        if (positionCorrector != null)
-                                        {
-                                            ApplyCorrectorSettings(positionCorrector);
-                                        }
-                                        this.BeginInvoke(new Action(() => AddLog("🔄 位置修正設定已即時套用")));
-                                    }
-
-                                    double secSinceLastCheck = Stopwatch.GetElapsedTime(lastCorrectionCheckTick).TotalSeconds;
-                                    if (secSinceLastCheck >= positionCorrectionSettings.CorrectionCheckIntervalSec)
-                                    {
-                                        // ★ 阻塞式修正：設定 isCorrecting，記錄修正耗時，修正後補償計時
-                                        isCorrecting = true;
-                                        long corrStartTick = Stopwatch.GetTimestamp();
-
-                                        double scriptTime = Stopwatch.GetElapsedTime(loopStartTick).TotalSeconds;
-                                        PeriodicPositionCheck(events, scriptTime);
-
-                                        long corrElapsedTicks = Stopwatch.GetTimestamp() - corrStartTick;
-                                        isCorrecting = false;
-
-                                        // ★ 時間補償：將修正耗時從等待計時和循環計時中扣除
-                                        waitStartTick += corrElapsedTicks;
-                                        loopStartTick += corrElapsedTicks;
-                                        lastCustomKeyCheckTick = Stopwatch.GetTimestamp();
-
-                                        // ★ 修正完成後才重設計時器
-                                        lastCorrectionCheckTick = Stopwatch.GetTimestamp();
-
-                                        // ★ 修正後恢復播放狀態標籤
-                                        int curLoop = currentLoopNum;
-                                        this.BeginInvoke(new Action(() =>
-                                        {
-                                            lblPlaybackStatus.Text = $"循環: {curLoop}/{loopCount}";
-                                            lblPlaybackStatus.ForeColor = Color.Blue;
-                                        }));
-                                    }
                                 }
 
                                 if (remaining > 0.05) // > 50ms：Sleep 較長以節省 CPU
@@ -2498,84 +1893,6 @@ namespace MapleStoryMacro
                                     Thread.Sleep(1);
                                 }
                             }
-                        }
-
-                        // ★ 位置修正事件 - 不發送按鍵，而是執行位置修正
-                        if (evt.EventType == "position_correct")
-                        {
-                            // ★ 修正未啟用時跳過腳本內的位置修正事件
-                            if (!positionCorrectionSettings.Enabled)
-                            {
-                                this.BeginInvoke(new Action(() =>
-                                    AddLog("⏭️ 位置修正事件已跳過（修正未啟用）")));
-                                lastTimestamp = evt.Timestamp;
-                                continue;
-                            }
-
-                            // ★ 使用腳本錄製座標作為修正目標（不再有固定目標模式）
-                            int tx = evt.RecordedX >= 0 ? evt.RecordedX : evt.CorrectTargetX;
-                            int ty = evt.RecordedY >= 0 ? evt.RecordedY : evt.CorrectTargetY;
-
-                            if (tx < 0 || ty < 0)
-                            {
-                                this.BeginInvoke(new Action(() =>
-                                    AddLog("⏭️ 位置修正事件已跳過（無錄製座標）")));
-                                lastTimestamp = evt.Timestamp;
-                                continue;
-                            }
-
-                            this.BeginInvoke(new Action(() =>
-                            {
-                                lblPlaybackStatus.Text = $"腳本位置修正中... 目標({tx},{ty})";
-                                lblPlaybackStatus.ForeColor = Color.Orange;
-                            }));
-
-                            if (minimapTracker != null && minimapTracker.IsCalibrated)
-                            {
-                                // ★ 阻塞式修正 + 時間補償
-                                isCorrecting = true;
-                                long corrStartTick = Stopwatch.GetTimestamp();
-
-                                var corrResult = ExecutePositionCorrectionTo(tx, ty);
-
-                                long corrElapsedTicks = Stopwatch.GetTimestamp() - corrStartTick;
-                                isCorrecting = false;
-
-                                // ★ 時間補償
-                                loopStartTick += corrElapsedTicks;
-                                lastCustomKeyCheckTick = Stopwatch.GetTimestamp();
-                                lastCorrectionCheckTick = Stopwatch.GetTimestamp();
-
-                                if (corrResult != null)
-                                {
-                                    var r = corrResult;
-                                    this.BeginInvoke(new Action(() =>
-                                    {
-                                        AddLog(r.Success
-                                            ? $"✅ 腳本位置修正完成: ({r.FinalX}, {r.FinalY})"
-                                            : $"⚠️ 腳本位置修正: {r.Message}");
-                                        // ★ 修正後恢復播放狀態
-                                        lblPlaybackStatus.Text = $"播放中...";
-                                        lblPlaybackStatus.ForeColor = Color.Blue;
-                                    }));
-                                }
-                                else
-                                {
-                                    this.BeginInvoke(new Action(() =>
-                                    {
-                                        lblPlaybackStatus.Text = $"播放中...";
-                                        lblPlaybackStatus.ForeColor = Color.Blue;
-                                    }));
-                                }
-                            }
-                            else
-                            {
-                                this.BeginInvoke(new Action(() =>
-                                    AddLog("⚠️ 位置修正卡片：小地圖未校準，跳過")));
-                            }
-
-                            lastTimestamp = evt.Timestamp;
-                            continue; // 跳過後面的 SendKeyEvent
                         }
 
                         // 記錄 keydown 時間戳，用於計算持續時間
@@ -2596,29 +1913,6 @@ namespace MapleStoryMacro
 
                         SendKeyEvent(evt);
                         lastTimestamp = evt.Timestamp;
-
-                        // ★ 追蹤按鍵後的實際XY座標（節流：每 2 秒最多一次，避免 ReadPosition 拖慢腳本）
-                        if (positionCorrectionSettings.Enabled && minimapTracker != null && minimapTracker.IsCalibrated
-                            && evt.RecordedX >= 0 && evt.RecordedY >= 0
-                            && Stopwatch.GetElapsedTime(lastDriftTrackTick).TotalSeconds >= 2.0)
-                        {
-                            lastDriftTrackTick = Stopwatch.GetTimestamp();
-                            var (ax, ay, aOk) = minimapTracker.ReadPosition();
-                            if (aOk)
-                            {
-                                int driftX = ax - evt.RecordedX;
-                                int driftY = ay - evt.RecordedY;
-                                // 只在偏差明顯時記錄，避免日誌過多
-                                if (Math.Abs(driftX) > positionCorrectionSettings.HorizontalTolerance ||
-                                    Math.Abs(driftY) > positionCorrectionSettings.VerticalTolerance)
-                                {
-                                    var evtCopy = evt;
-                                    this.BeginInvoke(new Action(() =>
-                                        AddLog($"📍 位置追蹤: 實際({ax},{ay}) 腳本({evtCopy.RecordedX},{evtCopy.RecordedY}) 偏差({driftX:+#;-#;0},{driftY:+#;-#;0})")
-                                    ));
-                                }
-                            }
-                        }
 
                         // 第一個按鍵發送後記錄
                         if (!firstKeySent)
@@ -2652,7 +1946,6 @@ namespace MapleStoryMacro
                     lblPlaybackStatus.ForeColor = Color.Green;
                     AddLog($"播放完成 - 循環: {statistics.CurrentLoopCount}");
                     UpdateUI();
-                    UpdatePauseButtonState();
                 }));
             }
             catch (Exception ex)
@@ -2673,7 +1966,6 @@ namespace MapleStoryMacro
                 {
                     AddLog($"❌ 播放錯誤: {ex.Message}");
                     UpdateUI();
-                    UpdatePauseButtonState();
                 }));
             }
         }
@@ -2684,10 +1976,6 @@ namespace MapleStoryMacro
         /// <returns>返回需要暫停的總時間（秒）</returns>
         private double CheckAndTriggerCustomKeys(double currentScriptTime)
         {
-            // 如果自定義按鍵被暫停，直接返回
-            if (customKeysPaused)
-                return 0;
-
             double totalPauseTime = 0;
 
             for (int i = 0; i < customKeySlots.Length; i++)
@@ -2744,43 +2032,23 @@ namespace MapleStoryMacro
 
         /// <summary>
         /// 發送自定義按鍵（按下後立即放開，單鍵）
-        /// ★ 與主播放相同路由：方向鍵用 ATT，非方向鍵用純 PostMessage（不洩漏到前景）
         /// </summary>
         private void SendCustomKey(Keys key, Keys modifiers = Keys.None)
         {
-            const int KEY_HOLD_MS = 60;         // 按鍵持續時間（毫秒）
-
             try
             {
                 if (targetWindowHandle != IntPtr.Zero && IsWindow(targetWindowHandle))
                 {
-                    // 背景模式：根據按鍵類型選擇發送方式（避免 ATT 洩漏到前景）
-                    if (IsArrowKey(key))
-                    {
-                        // 方向鍵：使用與主播放相同的模式（遊戲用 GetKeyState 輪詢，需要 ATT）
-                        SendArrowKeyWithMode(targetWindowHandle, key, true);
-                        Thread.Sleep(KEY_HOLD_MS);
-                        SendArrowKeyWithMode(targetWindowHandle, key, false);
-                    }
-                    else if (IsAltKey(key))
-                    {
-                        SendAltKeyToWindow(targetWindowHandle, key, true);
-                        Thread.Sleep(KEY_HOLD_MS);
-                        SendAltKeyToWindow(targetWindowHandle, key, false);
-                    }
-                    else
-                    {
-                        // 非方向鍵（ZXC 技能、藥水等）：純 PostMessage，不洩漏到前景
-                        SendKeyWithPostMessageOnly(targetWindowHandle, key, true);
-                        Thread.Sleep(KEY_HOLD_MS);
-                        SendKeyWithPostMessageOnly(targetWindowHandle, key, false);
-                    }
+                    // 背景模式
+                    SendKeyWithThreadAttach(targetWindowHandle, key, true);
+                    Thread.Sleep(30);
+                    SendKeyWithThreadAttach(targetWindowHandle, key, false);
                 }
                 else
                 {
                     // 前景模式
                     SendKeyForeground(key, true);
-                    Thread.Sleep(KEY_HOLD_MS);
+                    Thread.Sleep(30);
                     SendKeyForeground(key, false);
                 }
             }
@@ -2791,50 +2059,6 @@ namespace MapleStoryMacro
                     AddLog($"自定義按鍵發送失敗: {ex.Message}");
                 }));
             }
-        }
-
-        /// <summary>
-        /// 使用 PostMessage 發送按鍵（非阻塞）
-        /// </summary>
-        private void SendKeyWithPostMessage(IntPtr hWnd, Keys key, bool isKeyDown)
-        {
-            byte scanCode = GetScanCode(key);
-            uint lParamValue;
-            if (isKeyDown)
-            {
-                lParamValue = 1u | ((uint)scanCode << 16);
-                if (IsExtendedKey(key)) lParamValue |= (1u << 24);
-            }
-            else
-            {
-                lParamValue = 1u | ((uint)scanCode << 16) | (1u << 30) | (1u << 31);
-                if (IsExtendedKey(key)) lParamValue |= (1u << 24);
-            }
-            IntPtr lParam = (IntPtr)lParamValue;
-            uint msg = isKeyDown ? WM_KEYDOWN : WM_KEYUP;
-            PostMessage(hWnd, msg, (IntPtr)key, lParam);
-        }
-
-        /// <summary>
-        /// 使用 SendMessage 發送按鍵（阻塞等待處理完成）
-        /// </summary>
-        private void SendKeyWithSendMessage(IntPtr hWnd, Keys key, bool isKeyDown)
-        {
-            byte scanCode = GetScanCode(key);
-            uint lParamValue;
-            if (isKeyDown)
-            {
-                lParamValue = 1u | ((uint)scanCode << 16);
-                if (IsExtendedKey(key)) lParamValue |= (1u << 24);
-            }
-            else
-            {
-                lParamValue = 1u | ((uint)scanCode << 16) | (1u << 30) | (1u << 31);
-                if (IsExtendedKey(key)) lParamValue |= (1u << 24);
-            }
-            IntPtr lParam = (IntPtr)lParamValue;
-            uint msg = isKeyDown ? WM_KEYDOWN : WM_KEYUP;
-            SendMessage(hWnd, msg, (IntPtr)key, lParam);
         }
 
         private void SendKeyEvent(MacroEvent evt)
@@ -2851,43 +2075,25 @@ namespace MapleStoryMacro
                     {
                         SendAltKeyToWindow(targetWindowHandle, evt.KeyCode, isDown);
                     }
-                    // 方向鍵：ATT + PM 兩種訊號（必須這樣才能走路）
+                    // 對於方向鍵，根據設定的模式發送
                     else if (IsArrowKey(evt.KeyCode))
                     {
                         SendArrowKeyWithMode(targetWindowHandle, evt.KeyCode, isDown);
                     }
-                    // 英數鍵：純 PostMessage（不攔截、不洩漏）
+                    // 英數鍵：使用 PostMessage（不攔截）
                     else if (IsAlphaNumericKey(evt.KeyCode))
                     {
-                        SendKeyWithPostMessageOnly(targetWindowHandle, evt.KeyCode, isDown);
+                        SendKeyToWindow(targetWindowHandle, evt.KeyCode, isDown);
                     }
-                    // 導航鍵 (Delete, Insert, Home, End, PageUp, PageDown)：純 PM
-                    else if (IsNavigationKey(evt.KeyCode))
-                    {
-                        SendKeyWithPostMessageOnly(targetWindowHandle, evt.KeyCode, isDown);
-                    }
-                    // 功能鍵 (F1-F12)：純 PM
-                    else if (IsFunctionKey(evt.KeyCode))
-                    {
-                        SendKeyWithPostMessageOnly(targetWindowHandle, evt.KeyCode, isDown);
-                    }
-                    // 其他延伸鍵：根據模式決定
+                    // 對於其他延伸鍵，使用線程附加模式
                     else if (IsExtendedKey(evt.KeyCode))
                     {
-                        if (currentArrowKeyMode == ArrowKeyMode.SendToChild)
-                        {
-                            // S2C 模式下也用 PM
-                            SendKeyWithPostMessageOnly(targetWindowHandle, evt.KeyCode, isDown);
-                        }
-                        else
-                        {
-                            SendKeyWithThreadAttach(targetWindowHandle, evt.KeyCode, isDown);
-                        }
+                        SendKeyWithThreadAttach(targetWindowHandle, evt.KeyCode, isDown);
                     }
                     else
                     {
-                        // 其他一般按鍵：純 PM
-                        SendKeyWithPostMessageOnly(targetWindowHandle, evt.KeyCode, isDown);
+                        // 一般按鍵：使用背景模式
+                        SendKeyToWindow(targetWindowHandle, evt.KeyCode, isDown);
                     }
                     Debug.WriteLine($"背景: {evt.KeyCode} ({evt.EventType})");
                 }
@@ -2910,90 +2116,6 @@ namespace MapleStoryMacro
             catch (Exception ex)
             {
                 AddLog($"按鍵發送失敗: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// 檢查是否為導航鍵（Delete, Insert, Home, End, PageUp, PageDown）
-        /// </summary>
-
-        /// <summary>
-        /// 供位置修正器使用的按鍵發送方法 — 與主播放完全相同的路由邏輯
-        /// ★ 方向鍵：使用 SendArrowKeyWithMode（跟隨使用者選擇的模式）
-        /// ★ 非方向鍵：純 PostMessage（不透過 ATT 洩漏到前景）
-        /// </summary>
-        private void SendKeyForCorrection(IntPtr hWnd, Keys key, bool isKeyDown)
-        {
-            try
-            {
-                if (hWnd != IntPtr.Zero && IsWindow(hWnd))
-                {
-                    if (IsAltKey(key))
-                    {
-                        SendAltKeyToWindow(hWnd, key, isKeyDown);
-                    }
-                    else if (IsArrowKey(key))
-                    {
-                        // 方向鍵：使用與主播放相同的模式（遊戲用 GetKeyState 輪詢，需要 ATT）
-                        SendArrowKeyWithMode(hWnd, key, isKeyDown);
-                    }
-                    else
-                    {
-                        // 非方向鍵：純 PostMessage（不洩漏到前景應用程式）
-                        SendKeyWithPostMessageOnly(hWnd, key, isKeyDown);
-                    }
-                }
-                else
-                {
-                    SendKeyForeground(key, isKeyDown);
-                }
-            }
-            catch { }
-        }
-
-        private bool IsNavigationKey(Keys key)
-        {
-            return key == Keys.Delete || key == Keys.Insert ||
-                   key == Keys.Home || key == Keys.End ||
-                   key == Keys.PageUp || key == Keys.PageDown;
-        }
-
-        /// <summary>
-        /// 檢查是否為功能鍵 (F1-F12)
-        /// </summary>
-        private bool IsFunctionKey(Keys key)
-        {
-            return key >= Keys.F1 && key <= Keys.F12;
-        }
-
-        /// <summary>
-        /// 純 PostMessage 發送按鍵（不洩漏到前景）
-        /// </summary>
-        private void SendKeyWithPostMessageOnly(IntPtr hWnd, Keys key, bool isKeyDown)
-        {
-            uint scanCode = MapVirtualKey((uint)key, MAPVK_VK_TO_VSC);
-            bool isExtended = IsExtendedKey(key);
-
-            // 建構 lParam
-            uint lParamValue;
-            if (isKeyDown)
-            {
-                lParamValue = 1u | (scanCode << 16);
-                if (isExtended) lParamValue |= (1u << 24);
-            }
-            else
-            {
-                lParamValue = 1u | (scanCode << 16) | (1u << 30) | (1u << 31);
-                if (isExtended) lParamValue |= (1u << 24);
-            }
-
-            uint msg = isKeyDown ? WM_KEYDOWN : WM_KEYUP;
-            bool success = PostMessage(hWnd, msg, (IntPtr)key, (IntPtr)lParamValue);
-            
-            // 如果 PostMessage 失敗，嘗試 SendMessage
-            if (!success)
-            {
-                SendMessage(hWnd, msg, (IntPtr)key, (IntPtr)lParamValue);
             }
         }
 
@@ -3615,45 +2737,11 @@ namespace MapleStoryMacro
             }
 
             ReleasePressedKeys();
-
-            // 重置暫停狀態
-            lock (pauseLock)
-            {
-                isPaused = false;
-                System.Threading.Monitor.PulseAll(pauseLock);  // 喚醒可能暫停的線程
-            }
-
             isPlaying = false;
-
-            // 清除偏差修正的參考位置，下次播放時重新建立修正器
-            if (positionCorrector != null)
-            {
-                // ★ 停止時輸出修正歷史摘要
-                if (positionCorrector.HistoryCount > 0)
-                {
-                    AddLog($"📊 修正歷史: {positionCorrector.GetHistorySummary()}");
-                }
-                positionCorrector.ClearReferencePosition();
-                positionCorrector.ClearHistory();
-            }
-            positionCorrector = null; // 重建以避免重複日誌處理器
-
             lblPlaybackStatus.Text = "播放: 已停止";
             lblPlaybackStatus.ForeColor = Color.Orange;
             AddLog("播放已停止");
-            UpdatePauseButtonState();
             UpdateUI();
-        }
-
-        /// <summary>
-        /// 暫停按鈕點擊事件
-        /// </summary>
-        private void BtnPausePlayback_Click(object? sender, EventArgs e)
-        {
-            if (isPlaying)
-            {
-                TogglePause();
-            }
         }
 
         private void Form1_FormClosing(object? sender, FormClosingEventArgs e)
@@ -3670,15 +2758,12 @@ namespace MapleStoryMacro
             hotkeyHook?.Uninstall();  // 停止全局熱鍵監聽
             keyboardBlocker?.Uninstall();  // 停止鍵盤阻擋器
             keyboardBlocker?.Dispose();
-            minimapTracker?.Dispose();  // 釋放小地圖追蹤器
+            memoryScanner?.Dispose();  // 釋放記憶體掃描器
             monitorTimer?.Stop();
             schedulerTimer?.Stop();   // 停止定時執行計時器
 
             // 自動儲存設定（靜默，不顯示錯誤對話框）
             try { SaveSettingsToFile(SettingsFilePath, ""); } catch { }
-
-            Logger.Info("=== 程式關閉 ===");
-            Logger.Shutdown();
 
             AddLog("應用程式已關閉");
         }
@@ -3689,37 +2774,8 @@ namespace MapleStoryMacro
         private void HotkeyHook_OnKeyEvent(Keys keyCode, bool isKeyDown)
         {
             // 只處理按下事件，避免重複觸發
-            if (!isKeyDown || !hotkeyEnabled)
+            if (!isKeyDown || !hotkeyEnabled || isRecording)
                 return;
-
-            // ★ 錄製熱鍵：不管是否在錄製中都要處理（用來開始/停止錄製）
-            if (keyCode == recordHotkey)
-            {
-                this.BeginInvoke(new Action(() =>
-                {
-                    if (isRecording)
-                    {
-                        AddLog($"熱鍵觸發：停止錄製 ({GetKeyDisplayName(recordHotkey)})");
-                        BtnStopRecording_Click(this, EventArgs.Empty);
-                    }
-                    else if (!isPlaying)
-                    {
-                        AddLog($"熱鍵觸發：開始錄製 ({GetKeyDisplayName(recordHotkey)})");
-                        BtnStartRecording_Click(this, EventArgs.Empty);
-                    }
-                }));
-                return;
-            }
-
-            // 錄製中不處理其他熱鍵
-            if (isRecording) return;
-
-            // ★ F7 邊界設定熱鍵 — 狀態機
-            if (keyCode == boundaryHotkey)
-            {
-                this.BeginInvoke(new Action(() => HandleBoundaryHotkey()));
-                return;
-            }
 
             // 檢查是否為播放熱鍵
             if (keyCode == playHotkey)
@@ -3745,100 +2801,6 @@ namespace MapleStoryMacro
                     }
                 }));
             }
-            // 檢查是否為暫停熱鍵
-            else if (keyCode == pauseHotkey)
-            {
-                this.BeginInvoke(new Action(() =>
-                {
-                    if (isPlaying)
-                    {
-                        TogglePause();
-                    }
-                }));
-            }
-        }
-
-        /// <summary>
-        /// 切換暫停/繼續狀態
-        /// </summary>
-        private void TogglePause()
-        {
-            lock (pauseLock)
-            {
-                isPaused = !isPaused;
-
-                if (isPaused)
-                {
-                    AddLog($"⏸ 播放已暫停 ({GetKeyDisplayName(pauseHotkey)})");
-                    lblPlaybackStatus.Text = "狀態: 已暫停";
-                    lblPlaybackStatus.ForeColor = Color.Orange;
-                }
-                else
-                {
-                    AddLog($"▶ 播放已繼續 ({GetKeyDisplayName(pauseHotkey)})");
-                    lblPlaybackStatus.Text = "狀態: 播放中";
-                    lblPlaybackStatus.ForeColor = Color.Green;
-
-                    // 喚醒暫停中的線程
-                    System.Threading.Monitor.PulseAll(pauseLock);
-                }
-                
-                // 更新暫停按鈕狀態
-                UpdatePauseButtonState();
-            }
-        }
-        
-        /// <summary>
-        /// 更新暫停按鈕的外觀狀態
-        /// </summary>
-        private void UpdatePauseButtonState()
-        {
-            if (this.InvokeRequired)
-            {
-                this.Invoke(new Action(UpdatePauseButtonState));
-                return;
-            }
-            
-            if (isPlaying)
-            {
-                txtPauseHotkey.Enabled = true;
-                if (isPaused)
-                {
-                    // 暫停中 - 顯示繼續
-                    txtPauseHotkey.TextButton = "▶ 繼續";
-                    txtPauseHotkey.ColorBackground = Color.FromArgb(0, 150, 80); // 綠色
-                }
-                else
-                {
-                    // 播放中 - 顯示暫停
-                    txtPauseHotkey.TextButton = "⏸ 暫停";
-                    txtPauseHotkey.ColorBackground = Color.CornflowerBlue; // 藍色
-                }
-            }
-            else
-            {
-                // 未播放 - 禁用按鈕
-                txtPauseHotkey.Enabled = false;
-                txtPauseHotkey.TextButton = "⏸ 暫停";
-                txtPauseHotkey.ColorBackground = Color.FromArgb(80, 80, 85); // 灰色
-            }
-            
-            txtPauseHotkey.Invalidate();
-        }
-
-        /// <summary>
-        /// 檢查暫停狀態，如果暫停則等待
-        /// </summary>
-        private void CheckPauseState()
-        {
-            lock (pauseLock)
-            {
-                while (isPaused && isPlaying)
-                {
-                    // 暫停期間等待，直到被喚醒或停止
-                    System.Threading.Monitor.Wait(pauseLock, 100);  // 100ms 超時，避免死鎖
-                }
-            }
         }
 
         /// <summary>
@@ -3848,9 +2810,9 @@ namespace MapleStoryMacro
         {
             Form settingsForm = new Form
             {
-                Text = "⚙ 熱鍵設定",
+                Text = "⚙ 熱鍵與進階設定",
                 Width = 450,
-                Height = 350,
+                Height = 340,
                 StartPosition = FormStartPosition.CenterParent,
                 Owner = this,
                 FormBorderStyle = FormBorderStyle.FixedDialog,
@@ -3900,65 +2862,70 @@ namespace MapleStoryMacro
                 txtStop.Tag = e.KeyCode;
             };
 
-            // 暫停熱鍵
-            Label lblPause = new Label { Text = "暫停熱鍵：", Left = 20, Top = 110, Width = 100, ForeColor = Color.White };
-            TextBox txtPause = new TextBox
-            {
-                Left = 130,
-                Top = 107,
-                Width = 200,
-                ReadOnly = true,
-                Text = GetKeyDisplayName(pauseHotkey),
-                Tag = pauseHotkey,
-                BackColor = Color.FromArgb(60, 60, 65),
-                ForeColor = Color.White
-            };
-            txtPause.KeyDown += (s, e) =>
-            {
-                e.SuppressKeyPress = true;
-                txtPause.Text = GetKeyDisplayName(e.KeyCode);
-                txtPause.Tag = e.KeyCode;
-            };
-
-            // 錄製熱鍵
-            Label lblRecord = new Label { Text = "錄製熱鍵：", Left = 20, Top = 150, Width = 100, ForeColor = Color.White };
-            TextBox txtRecord = new TextBox
-            {
-                Left = 130,
-                Top = 147,
-                Width = 200,
-                ReadOnly = true,
-                Text = GetKeyDisplayName(recordHotkey),
-                Tag = recordHotkey,
-                BackColor = Color.FromArgb(60, 60, 65),
-                ForeColor = Color.White
-            };
-            txtRecord.KeyDown += (s, e) =>
-            {
-                e.SuppressKeyPress = true;
-                txtRecord.Text = GetKeyDisplayName(e.KeyCode);
-                txtRecord.Tag = e.KeyCode;
-            };
-
             // 啟用熱鍵
             CheckBox chkEnabled = new CheckBox
             {
                 Text = "啟用全局熱鍵",
                 Left = 20,
-                Top = 190,
+                Top = 110,
                 Width = 150,
                 Checked = hotkeyEnabled,
                 ForeColor = Color.White
             };
 
-            // 方向鍵模式已移至主介面「設定」群組
+            // 方向鍵模式選擇
+            Label lblArrowMode = new Label
+            {
+                Text = "方向鍵模式：",
+                Left = 20,
+                Top = 150,
+                Width = 100,
+                ForeColor = Color.Cyan
+            };
+            ComboBox cmbArrowMode = new ComboBox
+            {
+                Left = 130,
+                Top = 147,
+                Width = 200,
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                BackColor = Color.FromArgb(60, 60, 65),
+                ForeColor = Color.White
+            };
+
+            // 方向鍵模式選項
+            var availableModes = new (ArrowKeyMode mode, string name)[]
+            {
+                (ArrowKeyMode.SendToChild, "S2C (背景)"),
+                (ArrowKeyMode.ThreadAttachWithBlocker, "TAB"),
+                (ArrowKeyMode.SendInputWithBlock, "SWB")
+            };
+
+            foreach (var mode in availableModes)
+            {
+                cmbArrowMode.Items.Add(mode.name);
+            }
+
+            // 找到當前模式在列表中的索引
+            int currentIndex = Array.FindIndex(availableModes, m => m.mode == currentArrowKeyMode);
+            cmbArrowMode.SelectedIndex = currentIndex >= 0 ? currentIndex : 0;
+
+            // 方向鍵模式說明
+            Label lblArrowHint = new Label
+            {
+                Text = "S2C=背景(會洩漏) | TAB/SWB=嘗試攔截",
+                Left = 20,
+                Top = 180,
+                Width = 400,
+                ForeColor = Color.Yellow,
+                Font = new Font("Microsoft JhengHei UI", 8F)
+            };
 
             // 提示文字
             Label lblHint = new Label
             {
                 Text = "提示：點擊文字框後按下想要的按鍵",
                 Left = 20,
-                Top = 220,
+                Top = 210,
                 Width = 350,
                 ForeColor = Color.Gray
             };
@@ -3968,7 +2935,7 @@ namespace MapleStoryMacro
             {
                 Text = "儲存",
                 Left = 180,
-                Top = 260,
+                Top = 250,
                 Width = 80,
                 Height = 30,
                 BackColor = Color.FromArgb(0, 122, 204),
@@ -3979,7 +2946,7 @@ namespace MapleStoryMacro
             {
                 Text = "取消",
                 Left = 270,
-                Top = 260,
+                Top = 250,
                 Width = 80,
                 Height = 30,
                 BackColor = Color.FromArgb(80, 80, 85),
@@ -3991,12 +2958,12 @@ namespace MapleStoryMacro
             {
                 playHotkey = (Keys)txtPlay.Tag;
                 stopHotkey = (Keys)txtStop.Tag;
-                pauseHotkey = (Keys)txtPause.Tag;
-                recordHotkey = (Keys)txtRecord.Tag;
                 hotkeyEnabled = chkEnabled.Checked;
 
-                AddLog($"設定已儲存：播放={GetKeyDisplayName(playHotkey)}, 停止={GetKeyDisplayName(stopHotkey)}, 暫停={GetKeyDisplayName(pauseHotkey)}, 錄製={GetKeyDisplayName(recordHotkey)}");
-                SaveAppSettings();
+                // 從可用模式列表中取得實際的 enum 值
+                currentArrowKeyMode = availableModes[cmbArrowMode.SelectedIndex].mode;
+
+                AddLog($"設定已儲存：播放={GetKeyDisplayName(playHotkey)}, 停止={GetKeyDisplayName(stopHotkey)}, 模式={currentArrowKeyMode}");
                 settingsForm.Close();
             };
 
@@ -4004,8 +2971,8 @@ namespace MapleStoryMacro
 
             settingsForm.Controls.AddRange(new Control[]
             {
-                lblPlay, txtPlay, lblStop, txtStop, lblPause, txtPause,
-                lblRecord, txtRecord, chkEnabled,
+                lblPlay, txtPlay, lblStop, txtStop, chkEnabled,
+                lblArrowMode, cmbArrowMode, lblArrowHint,
                 lblHint, btnSave, btnCancel
             });
 
@@ -4473,7 +3440,7 @@ namespace MapleStoryMacro
             {
                 Text = "",
                 Left = 340,
-                Top = 105,
+                Top = 108,
                 Width = 20,
                 Checked = false,
                 ForeColor = Color.White
@@ -5122,88 +4089,114 @@ namespace MapleStoryMacro
         }
 
         /// <summary>
-        /// 小地圖校準設定儲存路徑
+        /// 記憶體位址儲存路徑
         /// </summary>
-        private static readonly string CalibrationFilePath = Path.Combine(
+        private static readonly string AddressFilePath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
             "MapleMacro",
-            "minimap_calibration.json");
+            "addresses.json");
 
         /// <summary>
-        /// ★ F7 邊界設定熱鍵處理 — 狀態機
-        /// 第一次按：開始設定（左邊界），之後每按一次前進一步
-        /// 順序：左 → 右 → 上 → 下 → 完成儲存 → 重置狀態
-        /// </summary>
-        private void HandleBoundaryHotkey()
-        {
-            if (minimapTracker == null || !minimapTracker.IsCalibrated)
-            {
-                AddLog("⚠️ F7 邊界設定：請先校準小地圖");
-                return;
-            }
-
-            string[] stateNames = { "左邊界", "右邊界", "上邊界", "下邊界" };
-
-            if (_boundarySetState < 0)
-            {
-                // 開始設定流程
-                _boundarySetState = 0;
-                AddLog($"🗺️ F7 邊界設定開始 — 將角色移到【{stateNames[0]}】位置，再按 F7");
-                return;
-            }
-
-            // 讀取當前位置
-            var (cx, cy, ok) = minimapTracker.ReadPosition();
-            if (!ok)
-            {
-                AddLog("⚠️ F7 邊界設定：偵測失敗，請重試");
-                return;
-            }
-
-            var bounds = minimapTracker.MapBounds;
-            int bL = bounds.Left, bR = bounds.Right, bT = bounds.Top, bB = bounds.Bottom;
-
-            switch (_boundarySetState)
-            {
-                case 0: bL = cx; AddLog($"✅ 左邊界 = {cx}"); break;
-                case 1: bR = cx; AddLog($"✅ 右邊界 = {cx}"); break;
-                case 2: bT = cy; AddLog($"✅ 上邊界 = {cy}"); break;
-                case 3: bB = cy; AddLog($"✅ 下邊界 = {cy}"); break;
-            }
-
-            // 更新 MapBounds
-            minimapTracker.MapBounds = new Rectangle(bL, bT, Math.Max(1, bR - bL), Math.Max(1, bB - bT));
-
-            _boundarySetState++;
-            if (_boundarySetState < 4)
-            {
-                AddLog($"🗺️ 將角色移到【{stateNames[_boundarySetState]}】位置，再按 F7");
-            }
-            else
-            {
-                // 全部設定完畢 → 儲存校準
-                _boundarySetState = -1;
-                minimapTracker.SaveCalibration(CalibrationFilePath);
-                AddLog($"🗺️ 邊界設定完成！左={bL} 右={bR} 上={bT} 下={bB} — 已儲存");
-            }
-        }
-
-        /// <summary>
-        /// 開啟小地圖校準介面
+        /// 位置掃描選擇視窗：自動掃描 vs 手動掃描
         /// </summary>
         private void OpenMemoryScannerChoice()
         {
-            // 直接進入校準介面（位置修正按鈕已整合在校準視窗內）
-            OpenMinimapCalibration();
+            // 先檢查是否已有有效位址
+            if (memoryScanner != null && memoryScanner.IsAttached)
+            {
+                if (memoryScanner.LoadAddresses(AddressFilePath) && memoryScanner.ValidateAddresses())
+                {
+                    var (x, y, ok) = memoryScanner.ReadPosition();
+                    if (ok)
+                    {
+                        var result = MessageBox.Show(
+                            $"已有有效的座標位址！\n\n目前位置: X={x}, Y={y}\n\n要重新掃描嗎？",
+                            "已有座標", MessageBoxButtons.YesNo, MessageBoxIcon.Information);
+                        if (result == DialogResult.No) return;
+                    }
+                }
+            }
+
+            Form choiceForm = new Form
+            {
+                Text = "📍 位置掃描",
+                Width = 420,
+                Height = 280,
+                StartPosition = FormStartPosition.CenterParent,
+                Owner = this,
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                MaximizeBox = false,
+                MinimizeBox = false,
+                BackColor = Color.FromArgb(45, 45, 48)
+            };
+
+            Label lblTitle = new Label
+            {
+                Text = "選擇掃描模式",
+                Left = 20,
+                Top = 20,
+                Width = 360,
+                Height = 25,
+                ForeColor = Color.White,
+                Font = new Font("Microsoft JhengHei UI", 12F, FontStyle.Bold),
+                TextAlign = ContentAlignment.MiddleCenter
+            };
+
+            // 自動掃描按鈕
+            Button btnAuto = new Button
+            {
+                Text = "🚀 自動掃描（推薦）\n只需跟著指示動一動角色",
+                Left = 30,
+                Top = 60,
+                Width = 340,
+                Height = 60,
+                BackColor = Color.FromArgb(0, 140, 80),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Microsoft JhengHei UI", 10F, FontStyle.Bold),
+                TextAlign = ContentAlignment.MiddleCenter
+            };
+
+            // 手動掃描按鈕
+            Button btnManual = new Button
+            {
+                Text = "🔍 手動掃描\n類似 Cheat Engine，自己操作篩選",
+                Left = 30,
+                Top = 135,
+                Width = 340,
+                Height = 55,
+                BackColor = Color.FromArgb(80, 80, 90),
+                ForeColor = Color.LightGray,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Microsoft JhengHei UI", 9F),
+                TextAlign = ContentAlignment.MiddleCenter
+            };
+
+            Button btnCancel = new Button
+            {
+                Text = "取消",
+                Left = 160,
+                Top = 205,
+                Width = 80,
+                Height = 30,
+                BackColor = Color.FromArgb(60, 60, 65),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
+
+            btnAuto.Click += (s, args) => { choiceForm.Close(); OpenAutoScanner(); };
+            btnManual.Click += (s, args) => { choiceForm.Close(); OpenMemoryScanner(); };
+            btnCancel.Click += (s, args) => choiceForm.Close();
+
+            choiceForm.Controls.AddRange(new Control[] { lblTitle, btnAuto, btnManual, btnCancel });
+            choiceForm.ShowDialog();
         }
 
         /// <summary>
-        /// 小地圖校準精靈
+        /// 自動掃描精靈 — 自動找出角色 X/Y 座標位址
+        /// 使用者只需跟著指示操作角色（站著不動、往右走、跳一下），程式自動完成所有掃描與篩選
         /// </summary>
-        /// <summary>
-        /// 小地圖校準精靈
-        /// </summary>
-        private void OpenMinimapCalibration()
+        private void OpenAutoScanner()
         {
             if (targetWindowHandle == IntPtr.Zero || !IsWindow(targetWindowHandle))
             {
@@ -5212,20 +4205,25 @@ namespace MapleStoryMacro
                 return;
             }
 
-            // 初始化追蹤器
-            if (minimapTracker == null)
-                minimapTracker = new MinimapTracker();
+            // 初始化掃描器
+            if (memoryScanner == null)
+                memoryScanner = new MemoryScanner();
 
-            minimapTracker.AttachToWindow(targetWindowHandle);
-
-            // 嘗試載入已有的校準
-            bool hasCalibration = minimapTracker.LoadCalibration(CalibrationFilePath);
-
-            Form calibForm = new Form
+            if (!memoryScanner.IsAttached)
             {
-                Text = "🗺️ 小地圖校準精靈",
-                Width = 750,
-                Height = 580,
+                if (!memoryScanner.AttachToWindow(targetWindowHandle))
+                {
+                    MessageBox.Show("無法開啟目標進程！\n\n請嘗試以管理員身份執行。",
+                        "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+            }
+
+            Form autoForm = new Form
+            {
+                Text = "🚀 自動座標掃描精靈",
+                Width = 500,
+                Height = 480,
                 StartPosition = FormStartPosition.CenterParent,
                 Owner = this,
                 FormBorderStyle = FormBorderStyle.FixedDialog,
@@ -5234,188 +4232,94 @@ namespace MapleStoryMacro
                 BackColor = Color.FromArgb(35, 35, 40)
             };
 
-            // ===== 左側：小地圖預覽區 =====
-            GroupBox grpPreview = new GroupBox
+            // 步驟標題
+            Label lblStep = new Label
             {
-                Text = "小地圖預覽 (點擊角色圖標學習顏色)",
-                Left = 15, Top = 15, Width = 350, Height = 300,
+                Left = 20,
+                Top = 20,
+                Width = 440,
+                Height = 30,
+                ForeColor = Color.Cyan,
+                Font = new Font("Microsoft JhengHei UI", 14F, FontStyle.Bold),
+                TextAlign = ContentAlignment.MiddleCenter,
+                Text = "準備開始"
+            };
+
+            // 大指示文字
+            Label lblInstruction = new Label
+            {
+                Left = 20,
+                Top = 60,
+                Width = 440,
+                Height = 80,
                 ForeColor = Color.White,
-                Font = new Font("Microsoft JhengHei UI", 9F)
-            };
-
-            PictureBox picMinimap = new PictureBox
-            {
-                Left = 10, Top = 25, Width = 330, Height = 220,
+                Font = new Font("Microsoft JhengHei UI", 16F, FontStyle.Bold),
+                TextAlign = ContentAlignment.MiddleCenter,
+                Text = "請讓角色站在平地上\n然後按下「開始掃描」",
                 BorderStyle = BorderStyle.FixedSingle,
-                BackColor = Color.Black,
-                SizeMode = PictureBoxSizeMode.Zoom,
-                Cursor = Cursors.Cross
+                BackColor = Color.FromArgb(50, 50, 58)
             };
 
-            Label lblMinimapInfo = new Label
+            // 倒數計時
+            Label lblCountdown = new Label
             {
-                Left = 10, Top = 250, Width = 330, Height = 20,
-                ForeColor = Color.LightGray,
-                Font = new Font("Microsoft JhengHei UI", 8.5F),
-                Text = "區域: 未設定"
-            };
-
-            Label lblColorInfo = new Label
-            {
-                Left = 10, Top = 272, Width = 330, Height = 20,
+                Left = 20,
+                Top = 150,
+                Width = 440,
+                Height = 50,
                 ForeColor = Color.Yellow,
-                Font = new Font("Microsoft JhengHei UI", 8.5F),
-                Text = "💡 點擊預覽圖上的角色圖標來學習顏色"
+                Font = new Font("Consolas", 24F, FontStyle.Bold),
+                TextAlign = ContentAlignment.MiddleCenter,
+                Text = ""
             };
 
-            grpPreview.Controls.AddRange(new Control[] { picMinimap, lblMinimapInfo, lblColorInfo });
-
-            // ===== 右上：小地圖區域設定 =====
-            GroupBox grpRegion = new GroupBox
+            // 進度條
+            ProgressBar progressBar = new ProgressBar
             {
-                Text = "📍 小地圖區域",
-                Left = 380, Top = 15, Width = 345, Height = 100,
-                ForeColor = Color.White,
-                Font = new Font("Microsoft JhengHei UI", 9F)
+                Left = 20,
+                Top = 210,
+                Width = 440,
+                Height = 20,
+                Minimum = 0,
+                Maximum = 100,
+                Value = 0,
+                Style = ProgressBarStyle.Continuous
             };
 
-            Label lblX = new Label { Text = "X:", Left = 15, Top = 28, Width = 25, ForeColor = Color.LightGray };
-            NumericUpDown numX = new NumericUpDown { Left = 40, Top = 25, Width = 60, Minimum = 0, Maximum = 2000, Value = minimapTracker.MinimapRegion.X };
-            Label lblY = new Label { Text = "Y:", Left = 110, Top = 28, Width = 25, ForeColor = Color.LightGray };
-            NumericUpDown numY = new NumericUpDown { Left = 135, Top = 25, Width = 60, Minimum = 0, Maximum = 2000, Value = minimapTracker.MinimapRegion.Y };
-            Label lblW = new Label { Text = "寬:", Left = 205, Top = 28, Width = 30, ForeColor = Color.LightGray };
-            NumericUpDown numW = new NumericUpDown { Left = 235, Top = 25, Width = 55, Minimum = 10, Maximum = 500, Value = Math.Max(10, minimapTracker.MinimapRegion.Width) };
-            Label lblH = new Label { Text = "高:", Left = 295, Top = 28, Width = 30, ForeColor = Color.LightGray };
-            NumericUpDown numH = new NumericUpDown { Left = 235, Top = 55, Width = 55, Minimum = 10, Maximum = 500, Value = Math.Max(10, minimapTracker.MinimapRegion.Height) };
-
-            Button btnSelectRegion = new Button
+            // 日誌
+            ListBox lstAutoLog = new ListBox
             {
-                Text = "🖱️ 框選區域",
-                Left = 15, Top = 58, Width = 100, Height = 28,
-                BackColor = Color.FromArgb(0, 140, 80),
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat,
-                Font = new Font("Microsoft JhengHei UI", 9F, FontStyle.Bold)
-            };
-
-            Button btnCapture = new Button
-            {
-                Text = "📷 截取預覽",
-                Left = 125, Top = 58, Width = 100, Height = 28,
-                BackColor = Color.FromArgb(80, 80, 90),
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
-            };
-
-            grpRegion.Controls.AddRange(new Control[] { lblX, numX, lblY, numY, lblW, numW, lblH, numH, btnSelectRegion, btnCapture });
-
-            // ===== 右中：活動範圍邊界 =====
-            GroupBox grpBounds = new GroupBox
-            {
-                Text = "🎯 活動範圍邊界 (移動角色後點擊設定)",
-                Left = 380, Top = 120, Width = 345, Height = 130,
-                ForeColor = Color.White,
-                Font = new Font("Microsoft JhengHei UI", 9F)
-            };
-
-            Label lblBoundLeft = new Label { Text = "左: ---", Left = 15, Top = 25, Width = 70, ForeColor = Color.LightGray };
-            Label lblBoundRight = new Label { Text = "右: ---", Left = 95, Top = 25, Width = 70, ForeColor = Color.LightGray };
-            Label lblBoundTop = new Label { Text = "上: ---", Left = 175, Top = 25, Width = 70, ForeColor = Color.LightGray };
-            Label lblBoundBottom = new Label { Text = "下: ---", Left = 255, Top = 25, Width = 70, ForeColor = Color.LightGray };
-
-            Button btnSetLeft = new Button { Text = "⬅ 左", Left = 15, Top = 50, Width = 75, Height = 28, BackColor = Color.FromArgb(60, 60, 70), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
-            Button btnSetRight = new Button { Text = "右 ➡", Left = 95, Top = 50, Width = 75, Height = 28, BackColor = Color.FromArgb(60, 60, 70), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
-            Button btnSetTop = new Button { Text = "⬆ 上", Left = 175, Top = 50, Width = 75, Height = 28, BackColor = Color.FromArgb(60, 60, 70), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
-            Button btnSetBottom = new Button { Text = "下 ⬇", Left = 255, Top = 50, Width = 75, Height = 28, BackColor = Color.FromArgb(60, 60, 70), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
-
-            Button btnResetBounds = new Button { Text = "🔄 重設", Left = 15, Top = 85, Width = 75, Height = 28, BackColor = Color.FromArgb(100, 60, 60), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
-
-            Label lblBoundTip = new Label { Text = "F7: 依序設定左→右→上→下", Left = 100, Top = 92, Width = 220, ForeColor = Color.Cyan, Font = new Font("Microsoft JhengHei UI", 8F) };
-
-            grpBounds.Controls.AddRange(new Control[] { lblBoundLeft, lblBoundRight, lblBoundTop, lblBoundBottom, btnSetLeft, btnSetRight, btnSetTop, btnSetBottom, btnResetBounds, lblBoundTip });
-
-            // ===== 右下：顏色設定 =====
-            GroupBox grpColor = new GroupBox
-            {
-                Text = "🎨 角色圖標顏色 (點擊預覽圖學習)",
-                Left = 380, Top = 255, Width = 345, Height = 60,
-                ForeColor = Color.White,
-                Font = new Font("Microsoft JhengHei UI", 9F)
-            };
-
-            Label lblHue = new Label { Text = "色相:", Left = 15, Top = 25, Width = 40, ForeColor = Color.LightGray };
-            NumericUpDown numHueMin = new NumericUpDown { Left = 55, Top = 22, Width = 50, Minimum = 0, Maximum = 360, Value = (decimal)minimapTracker.HueRange.Min };
-            Label lblHueTo = new Label { Text = "~", Left = 108, Top = 25, Width = 15, ForeColor = Color.LightGray };
-            NumericUpDown numHueMax = new NumericUpDown { Left = 123, Top = 22, Width = 50, Minimum = 0, Maximum = 360, Value = (decimal)minimapTracker.HueRange.Max };
-
-            Label lblSat = new Label { Text = "飽和:", Left = 180, Top = 25, Width = 40, ForeColor = Color.LightGray };
-            NumericUpDown numSat = new NumericUpDown { Left = 220, Top = 22, Width = 50, Minimum = 0, Maximum = 100, Value = (decimal)(minimapTracker.MinSaturation * 100), DecimalPlaces = 0 };
-            Label lblSatPct = new Label { Text = "%", Left = 272, Top = 25, Width = 20, ForeColor = Color.LightGray };
-
-            Panel pnlColorPreview = new Panel { Left = 300, Top = 20, Width = 30, Height = 30, BorderStyle = BorderStyle.FixedSingle };
-
-            grpColor.Controls.AddRange(new Control[] { lblHue, numHueMin, lblHueTo, numHueMax, lblSat, numSat, lblSatPct, pnlColorPreview });
-
-            // ===== 底部：偵測結果 =====
-            GroupBox grpResult = new GroupBox
-            {
-                Text = "📊 偵測結果",
-                Left = 15, Top = 320, Width = 710, Height = 100,
-                ForeColor = Color.White,
-                Font = new Font("Microsoft JhengHei UI", 9F)
-            };
-
-            Label lblDetectResult = new Label
-            {
-                Left = 15, Top = 25, Width = 200, Height = 65,
-                ForeColor = Color.Gray,
-                Font = new Font("Consolas", 11F, FontStyle.Bold),
-                Text = "尚未偵測"
-            };
-
-            PictureBox picDebug = new PictureBox
-            {
-                Left = 230, Top = 18, Width = 250, Height = 72,
+                Left = 20,
+                Top = 245,
+                Width = 440,
+                Height = 120,
+                BackColor = Color.FromArgb(25, 25, 30),
+                ForeColor = Color.LightGray,
                 BorderStyle = BorderStyle.FixedSingle,
-                BackColor = Color.Black,
-                SizeMode = PictureBoxSizeMode.Zoom
+                Font = new Font("Microsoft JhengHei UI", 9F)
             };
 
-            Button btnTest = new Button
+            // 結果顯示
+            Label lblResult = new Label
             {
-                Text = "🎯 測試偵測",
-                Left = 500, Top = 25, Width = 100, Height = 30,
-                BackColor = Color.FromArgb(180, 120, 0),
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
+                Left = 20,
+                Top = 375,
+                Width = 440,
+                Height = 25,
+                ForeColor = Color.Lime,
+                Font = new Font("Consolas", 12F, FontStyle.Bold),
+                TextAlign = ContentAlignment.MiddleCenter,
+                Text = ""
             };
 
-            Button btnAutoTest = new Button
+            // 按鈕
+            Button btnStart = new Button
             {
-                Text = "🔄 連續測試",
-                Left = 610, Top = 25, Width = 85, Height = 30,
-                BackColor = Color.FromArgb(80, 80, 90),
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
-            };
-
-            grpResult.Controls.AddRange(new Control[] { lblDetectResult, picDebug, btnTest, btnAutoTest });
-
-            // ===== 最底部按鈕 =====
-            Button btnCorrection = new Button
-            {
-                Text = "🎯 位置修正",
-                Left = 340, Top = 435, Width = 120, Height = 35,
-                BackColor = Color.FromArgb(180, 120, 0),
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat,
-                Font = new Font("Microsoft JhengHei UI", 10F, FontStyle.Bold)
-            };
-
-            Button btnSave = new Button
-            {
-                Text = "💾 儲存校準",
-                Left = 470, Top = 435, Width = 120, Height = 35,
+                Text = "🚀 開始掃描",
+                Left = 100,
+                Top = 405,
+                Width = 140,
+                Height = 35,
                 BackColor = Color.FromArgb(0, 140, 80),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
@@ -5425,883 +4329,1463 @@ namespace MapleStoryMacro
             Button btnClose = new Button
             {
                 Text = "關閉",
-                Left = 605, Top = 435, Width = 80, Height = 35,
+                Left = 260,
+                Top = 405,
+                Width = 100,
+                Height = 35,
                 BackColor = Color.FromArgb(80, 80, 85),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat
             };
 
-            Label lblStatus = new Label
-            {
-                Left = 15, Top = 445, Width = 440, Height = 25,
-                ForeColor = hasCalibration ? Color.Lime : Color.Gray,
-                Font = new Font("Microsoft JhengHei UI", 9F),
-                Text = hasCalibration ? "✅ 已載入先前的校準設定" : "⚠️ 尚未校準"
-            };
+            // 自動掃描狀態（用陣列包裝以允許閉包中跨線程存取）
+            bool[] cancelFlag = [false];
 
-            // ===== 變數 =====
-            int boundLeft = 0, boundRight = 100, boundTop = 0, boundBottom = 100;
-            bool boundsExplicitlySet = false;
-            System.Windows.Forms.Timer? autoTestTimer = null;
-            Bitmap? currentMinimapBitmap = null;
-
-            if (hasCalibration && minimapTracker.MapBounds.Width > 0)
+            Action<string> addAutoLog = (msg) =>
             {
-                boundLeft = minimapTracker.MapBounds.Left;
-                boundRight = minimapTracker.MapBounds.Right;
-                boundTop = minimapTracker.MapBounds.Top;
-                boundBottom = minimapTracker.MapBounds.Bottom;
-                boundsExplicitlySet = true;
-                lblBoundLeft.Text = $"左: {boundLeft}";
-                lblBoundRight.Text = $"右: {boundRight}";
-                lblBoundTop.Text = $"上: {boundTop}";
-                lblBoundBottom.Text = $"下: {boundBottom}";
-            }
-
-            // ★ F7 邊界同步：HandleBoundaryHotkey 更新 MapBounds 時自動同步到對話框
-            System.Windows.Forms.Timer boundarySyncTimer = new System.Windows.Forms.Timer { Interval = 300 };
-            boundarySyncTimer.Tick += (s, e) =>
-            {
-                if (minimapTracker != null && minimapTracker.MapBounds.Width > 0)
-                {
-                    var mb = minimapTracker.MapBounds;
-                    int mbRight = mb.Left + mb.Width;
-                    int mbBottom = mb.Top + mb.Height;
-                    if (mb.Left != boundLeft || mbRight != boundRight || mb.Top != boundTop || mbBottom != boundBottom)
-                    {
-                        boundLeft = mb.Left; boundRight = mbRight;
-                        boundTop = mb.Top; boundBottom = mbBottom;
-                        boundsExplicitlySet = true;
-                        lblBoundLeft.Text = $"左: {boundLeft}"; lblBoundRight.Text = $"右: {boundRight}";
-                        lblBoundTop.Text = $"上: {boundTop}"; lblBoundBottom.Text = $"下: {boundBottom}";
-                        lblBoundLeft.ForeColor = lblBoundRight.ForeColor = lblBoundTop.ForeColor = lblBoundBottom.ForeColor = Color.Lime;
-                    }
-                }
-                // 顯示 F7 設定進度
-                if (_boundarySetState >= 0 && _boundarySetState < 4)
-                {
-                    string[] nextNames = { "左邊界", "右邊界", "上邊界", "下邊界" };
-                    lblBoundTip.Text = $"F7: 等待設定【{nextNames[_boundarySetState]}】...";
-                    lblBoundTip.ForeColor = Color.Yellow;
-                }
+                if (lstAutoLog.InvokeRequired)
+                    lstAutoLog.BeginInvoke(new Action(() => { lstAutoLog.Items.Add(msg); lstAutoLog.TopIndex = lstAutoLog.Items.Count - 1; }));
                 else
+                { lstAutoLog.Items.Add(msg); lstAutoLog.TopIndex = lstAutoLog.Items.Count - 1; }
+            };
+
+            Action<string> setStep = (text) =>
+            {
+                if (lblStep.InvokeRequired)
+                    lblStep.BeginInvoke(new Action(() => lblStep.Text = text));
+                else lblStep.Text = text;
+            };
+
+            Action<string> setInstruction = (text) =>
+            {
+                if (lblInstruction.InvokeRequired)
+                    lblInstruction.BeginInvoke(new Action(() => lblInstruction.Text = text));
+                else lblInstruction.Text = text;
+            };
+
+            Action<string> setCountdown = (text) =>
+            {
+                if (lblCountdown.InvokeRequired)
+                    lblCountdown.BeginInvoke(new Action(() => lblCountdown.Text = text));
+                else lblCountdown.Text = text;
+            };
+
+            Action<int> setProgress = (val) =>
+            {
+                if (progressBar.InvokeRequired)
+                    progressBar.BeginInvoke(new Action(() => progressBar.Value = Math.Min(val, 100)));
+                else progressBar.Value = Math.Min(val, 100);
+            };
+
+            Action<string, Color> setResult = (text, color) =>
+            {
+                if (lblResult.InvokeRequired)
+                    lblResult.BeginInvoke(new Action(() => { lblResult.Text = text; lblResult.ForeColor = color; }));
+                else { lblResult.Text = text; lblResult.ForeColor = color; }
+            };
+
+            // 倒數等待（顯示倒數，可取消）
+            Func<int, string, bool> waitWithCountdown = (seconds, instruction) =>
+            {
+                setInstruction(instruction);
+                for (int i = seconds; i > 0; i--)
                 {
-                    lblBoundTip.Text = "F7: 依序設定左→右→上→下";
-                    lblBoundTip.ForeColor = Color.Cyan;
+                    if (cancelFlag[0]) return false;
+                    setCountdown($"{i} 秒");
+                    Thread.Sleep(1000);
                 }
-            };
-            boundarySyncTimer.Start();
-
-            // 更新顏色預覽
-            Action updateColorPreview = () =>
-            {
-                float hue = ((float)numHueMin.Value + (float)numHueMax.Value) / 2f;
-                pnlColorPreview.BackColor = ColorFromHSV(hue, 0.8, 0.9);
-            };
-            updateColorPreview();
-
-            // ===== 輔助函數 =====
-            Action updateRegion = () =>
-            {
-                minimapTracker.MinimapRegion = new Rectangle((int)numX.Value, (int)numY.Value, (int)numW.Value, (int)numH.Value);
-                lblMinimapInfo.Text = $"區域: X={numX.Value}, Y={numY.Value}, {numW.Value}x{numH.Value}";
+                setCountdown("");
+                return true;
             };
 
-            Action updateMapBounds = () =>
+            // ===== 自動掃描背景線程 =====
+            void AutoScanWorker()
             {
-                minimapTracker.MapBounds = new Rectangle(boundLeft, boundTop, boundRight - boundLeft, boundBottom - boundTop);
-            };
-
-            Action updateColorSettings = () =>
-            {
-                minimapTracker.HueRange = ((float)numHueMin.Value, (float)numHueMax.Value);
-                minimapTracker.MinSaturation = (float)numSat.Value / 100f;
-                updateColorPreview();
-            };
-
-            Func<(int x, int y, bool success)> detectCurrentPixelPos = () =>
-            {
-                updateRegion();
-                updateColorSettings();
-                return minimapTracker.ReadPosition();
-            };
-
-            // ===== 事件處理 =====
-            numX.ValueChanged += (s, e) => updateRegion();
-            numY.ValueChanged += (s, e) => updateRegion();
-            numW.ValueChanged += (s, e) => updateRegion();
-            numH.ValueChanged += (s, e) => updateRegion();
-            numHueMin.ValueChanged += (s, e) => updateColorSettings();
-            numHueMax.ValueChanged += (s, e) => updateColorSettings();
-            numSat.ValueChanged += (s, e) => updateColorSettings();
-
-            // 點擊預覽圖學習顏色
-            picMinimap.MouseClick += (senderObj, e) =>
-            {
-                if (currentMinimapBitmap == null) return;
-
-                // 計算實際點擊位置（考慮縮放）
-                float scaleX = (float)currentMinimapBitmap.Width / picMinimap.Width;
-                float scaleY = (float)currentMinimapBitmap.Height / picMinimap.Height;
-                float scale = Math.Max(scaleX, scaleY);
-                
-                int offsetX = (int)((picMinimap.Width - currentMinimapBitmap.Width / scale) / 2);
-                int offsetY = (int)((picMinimap.Height - currentMinimapBitmap.Height / scale) / 2);
-                
-                int imgX = (int)((e.X - offsetX) * scale);
-                int imgY = (int)((e.Y - offsetY) * scale);
-
-                if (imgX < 0 || imgX >= currentMinimapBitmap.Width || imgY < 0 || imgY >= currentMinimapBitmap.Height)
-                    return;
-
-                // 取得點擊位置的顏色
-                Color clickedColor = currentMinimapBitmap.GetPixel(imgX, imgY);
-                
-                // 轉換為 HSV
-                float h, s, v;
-                ColorToHSV(clickedColor, out h, out s, out v);
-
-                // 設定色相範圍 (±15度)
-                numHueMin.Value = Math.Max(0, (decimal)(h - 15));
-                numHueMax.Value = Math.Min(360, (decimal)(h + 15));
-                numSat.Value = Math.Max(20, (decimal)(s * 100 - 20)); // 飽和度下限
-
-                lblColorInfo.Text = $"✅ 已學習顏色: RGB({clickedColor.R},{clickedColor.G},{clickedColor.B}) H={h:F0}°";
-                lblColorInfo.ForeColor = Color.Lime;
-                lblStatus.Text = $"✅ 已學習顏色 (色相: {h:F0}°)";
-                lblStatus.ForeColor = Color.Lime;
-            };
-
-            btnSelectRegion.Click += (s, e) =>
-            {
-                using (var screenshot = minimapTracker.CaptureFullWindow())
+                try
                 {
-                    if (screenshot == null)
+                    var scanner = memoryScanner!;
+                    int resultCount;
+
+                    // ========== 階段 1：尋找 X 座標 ==========
+                    // 使用快照比較法：先拍快照 → 移動 → 比較差異，避免 FirstScanRange 產生數千萬筆結果
+                    setStep("步驟 1/6 — 拍攝快照");
+                    addAutoLog("📸 正在拍攝記憶體快照...");
+                    setInstruction("🧍 請讓角色站著不動！");
+                    if (!waitWithCountdown(2, "🧍 請讓角色站著不動！")) return;
+
+                    setProgress(5);
+                    int snapshotSize = scanner.TakeSnapshot();
+                    addAutoLog($"快照完成：{snapshotSize / 1024.0 / 1024.0:F1} MB");
+                    if (snapshotSize == 0) { setResult("❌ 無法讀取記憶體，請確認遊戲運行中且已以管理員執行", Color.Red); return; }
+
+                    // 往右走 → 快照比較找出值增加的位址
+                    setStep("步驟 2/6 — 往右走");
+                    setInstruction("👉 請操作角色一直往右走！");
+                    setCountdown("開始走！");
+                    Thread.Sleep(500);
+                    if (!waitWithCountdown(4, "👉 一直往右走！不要停！")) return;
+                    setProgress(20);
+                    resultCount = scanner.CompareSnapshotIncreased(-30000, 30000);
+                    addAutoLog($"快照比較（值增加 & 範圍 ±30000）→ {resultCount:N0} 個候選");
+                    if (resultCount == 0) { setResult("❌ 未找到任何值增加的位址，請確保角色有實際往右移動", Color.Red); return; }
+
+                    // 停下來 → 多次取樣確認完全穩定
+                    setStep("步驟 3/6 — 靜止篩選");
+                    setInstruction("🧍 請停下來！站著不動！");
+                    if (!waitWithCountdown(3, "🧍 請停下來！站著不動！")) return;
+                    setProgress(30);
+                    addAutoLog("多次取樣驗證穩定性（1.5 秒）...");
+                    resultCount = scanner.FilterStable(1500, 150);
+                    addAutoLog($"靜止篩選（多次取樣穩定）→ 剩餘 {resultCount:N0}");
+
+                    // 往左走 → 多次取樣確認持續減少
+                    setStep("步驟 4/6 — 往左走");
+                    if (!waitWithCountdown(3, "👈 準備往左走！")) return;
+                    setInstruction("👈 一直往左走！不要停！");
+                    setCountdown("←←←");
+                    Thread.Sleep(800); // 確保角色已開始移動
+                    setProgress(40);
+                    addAutoLog("多次取樣驗證持續減少（2.5 秒）...");
+                    resultCount = scanner.FilterContinuouslyDecreasing(2500, 100, 0.35);
+                    setCountdown("");
+                    addAutoLog($"往左走篩選（持續減少）→ 剩餘 {resultCount:N0}");
+
+                    // 再停下 → 多次取樣確認穩定
+                    setStep("步驟 5/6 — 再次靜止");
+                    setInstruction("🧍 停下來！站著不動！");
+                    if (!waitWithCountdown(3, "🧍 停下來！站著不動！")) return;
+                    setProgress(55);
+                    addAutoLog("多次取樣驗證穩定性（1.5 秒）...");
+                    resultCount = scanner.FilterStable(1500, 150);
+                    addAutoLog($"靜止篩選（多次取樣穩定）→ 剩餘 {resultCount:N0}");
+
+                    // 額外往右走一次確認（持續增加）
+                    if (resultCount > 5)
                     {
-                        MessageBox.Show("無法截取遊戲視窗！", "截取失敗", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                        return;
+                        if (!waitWithCountdown(3, "👉 準備往右走！")) return;
+                        setInstruction("👉 一直往右走！不要停！");
+                        setCountdown("→→→");
+                        Thread.Sleep(800); // 確保角色已開始移動
+                        addAutoLog("多次取樣驗證持續增加（2 秒）...");
+                        resultCount = scanner.FilterContinuouslyIncreasing(2000, 100, 0.35);
+                        setCountdown("");
+                        addAutoLog($"再次往右篩選（持續增加）→ 剩餘 {resultCount:N0}");
+
+                        setInstruction("🧍 停下來！站著不動！");
+                        if (!waitWithCountdown(2, "🧍 停下來！")) return;
+                        resultCount = scanner.FilterStable(1200, 150);
+                        addAutoLog($"靜止篩選 → 剩餘 {resultCount:N0}");
                     }
-                    calibForm.Hide();
-                    var region = RegionSelector.SelectRegion(screenshot);
-                    calibForm.Show();
 
-                    if (region.HasValue)
+                    setProgress(75);
+
+                    // ========== 智慧選取 X 座標（自動評分 + 手動備援）==========
+                    IntPtr bestXAddr = IntPtr.Zero;
+                    int bestXValue = 0;
+
+                    if (scanner.Results.Count > 0)
                     {
-                        numX.Value = Math.Min(numX.Maximum, Math.Max(numX.Minimum, region.Value.X));
-                        numY.Value = Math.Min(numY.Maximum, Math.Max(numY.Minimum, region.Value.Y));
-                        numW.Value = Math.Min(numW.Maximum, Math.Max(numW.Minimum, region.Value.Width));
-                        numH.Value = Math.Min(numH.Maximum, Math.Max(numH.Minimum, region.Value.Height));
-                        updateRegion();
+                        scanner.RefreshValues();
+                        var xCandidates = scanner.Results
+                            .Where(r => r.Value >= -30000 && r.Value <= 30000)
+                            .Take(50)
+                            .ToList();
+                        if (xCandidates.Count == 0)
+                            xCandidates = scanner.Results.Take(50).ToList();
 
-                        // 自動截取預覽
-                        using (var bmp = minimapTracker.CaptureMinimap())
+                        addAutoLog($"篩選出 {xCandidates.Count} 個 X 候選，開始自動評分...");
+
+                        // --- 第一輪：靜止取樣（淘汰不穩定的候選）---
+                        setStep("自動評分中...");
+                        setInstruction("🧍 站著不動！正在驗證穩定性...");
+                        var stillSamples = scanner.RapidSample(xCandidates, 1500, 150);
+
+                        // 淘汰靜止時不穩定的候選
+                        var stableCandidates = new List<(int index, MemoryScanner.ScanResult candidate)>();
+                        for (int i = 0; i < xCandidates.Count; i++)
                         {
-                            if (bmp != null)
+                            int[] samples = stillSamples[i];
+                            if (samples.All(v => v == samples[0]) && samples[0] >= -30000 && samples[0] <= 30000)
+                                stableCandidates.Add((i, xCandidates[i]));
+                        }
+                        addAutoLog($"靜止穩定性淘汰 → 剩餘 {stableCandidates.Count} 個");
+
+                        if (stableCandidates.Count > 0)
+                        {
+                            // --- 第二輪：走路取樣 ---
+                            if (!waitWithCountdown(2, "👉 準備往右走！")) return;
+                            setInstruction("👉 一直往右走！持續走！");
+                            setCountdown("→→→");
+                            Thread.Sleep(800); // 確保角色已開始移動
+                            var moveSamples = scanner.RapidSample(
+                                stableCandidates.Select(c => c.candidate).ToList(), 2000, 100);
+
+                            setInstruction("🧍 站著不動！");
+                            setCountdown("");
+                            if (!waitWithCountdown(2, "🧍 停下來！站著不動！")) return;
+
+                            // --- 第三輪：再次靜止驗證 ---
+                            var still2Samples = scanner.RapidSample(
+                                stableCandidates.Select(c => c.candidate).ToList(), 1000, 150);
+
+                            // --- 評分 ---
+                            var scored = new List<(MemoryScanner.ScanResult candidate, double score, int origIndex)>();
+                            for (int i = 0; i < stableCandidates.Count; i++)
                             {
-                                currentMinimapBitmap?.Dispose();
-                                currentMinimapBitmap = new Bitmap(bmp);
-                                picMinimap.Image?.Dispose();
-                                picMinimap.Image = new Bitmap(bmp);
+                                double s = MemoryScanner.ScoreCoordinate(
+                                    stillSamples[stableCandidates[i].index],
+                                    moveSamples[i],
+                                    expectIncrease: true);
+                                // 第二次靜止也要穩定（額外驗證）
+                                int[] s2 = still2Samples[i];
+                                if (s2.Distinct().Count() > 2) s *= 0.3;
+                                scored.Add((stableCandidates[i].candidate, s, stableCandidates[i].index));
+                            }
+                            scored = scored.OrderByDescending(x => x.score).ToList();
+
+                            if (scored.Count > 0)
+                            {
+                                addAutoLog($"評分排名：");
+                                foreach (var (c, sc, _) in scored.Take(5))
+                                    addAutoLog($"  0x{c.Address.ToInt64():X8} = {c.Value}, 分數={sc:F0}");
+                            }
+
+                            // 自動選取判定
+                            if (scored.Count > 0 && scored[0].score >= 70)
+                            {
+                                double topScore = scored[0].score;
+                                double secondScore = scored.Count > 1 ? scored[1].score : 0;
+                                // 最高分明顯高於第二名，自動選取
+                                if (topScore >= 85 || (topScore - secondScore) >= 20)
+                                {
+                                    bestXAddr = scored[0].candidate.Address;
+                                    scanner.ReadInt32(bestXAddr, out bestXValue);
+                                    addAutoLog($"✅ 自動選取 X: 0x{bestXAddr.ToInt64():X8} = {bestXValue} (分數 {topScore:F0})");
+                                }
+                            }
+
+                            // 無法自動決定 → 開啟手動選取（按分數排序）
+                            if (bestXAddr == IntPtr.Zero)
+                            {
+                                addAutoLog("⚠️ 無法自動決定，開啟手動選取...");
+                                setStep("請手動選取 X 座標");
+                                setInstruction("自動評分不確定\n請在監控視窗中手動選取");
+
+                                var sortedCandidates = scored.Select(x => x.candidate).ToList();
+                                var candidateScores = scored.Select(x => x.score).ToList();
+
+                                MemoryScanner.ScanResult? xPick = null;
+                                autoForm.Invoke(new Action(() =>
+                                {
+                                    xPick = ShowCandidatePicker(scanner, sortedCandidates,
+                                        "👉 選取 X 座標（水平位置）",
+                                        "左右移動角色，觀察哪個值跟著增減\n找到後點擊該行，再按「確認選取」",
+                                        candidateScores);
+                                }));
+
+                                if (xPick != null)
+                                {
+                                    bestXAddr = xPick.Address;
+                                    scanner.ReadInt32(bestXAddr, out bestXValue);
+                                    addAutoLog($"✅ X 座標已手動選取: 0x{bestXAddr.ToInt64():X8} = {bestXValue}");
+                                }
                             }
                         }
-                        lblStatus.Text = "✅ 區域已框選！點擊預覽圖上的角色學習顏色";
-                        lblStatus.ForeColor = Color.Lime;
-                    }
-                }
-            };
-
-            btnCapture.Click += (s, e) =>
-            {
-                updateRegion();
-                using (var bmp = minimapTracker.CaptureMinimap())
-                {
-                    if (bmp != null)
-                    {
-                        currentMinimapBitmap?.Dispose();
-                        currentMinimapBitmap = new Bitmap(bmp);
-                        picMinimap.Image?.Dispose();
-                        picMinimap.Image = new Bitmap(bmp);
-                    }
-                    else
-                    {
-                        MessageBox.Show("截取失敗！", "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    }
-                }
-            };
-
-            // 邊界設定按鈕
-            Action<string, Action<int>, Label> setBoundary = (name, setter, label) =>
-            {
-                var (x, y, success) = detectCurrentPixelPos();
-                if (success)
-                {
-                    int val = name.Contains("左") || name.Contains("右") ? x : y;
-                    setter(val);
-                    label.Text = $"{name.Substring(0,1)}: {val}";
-                    label.ForeColor = Color.Lime;
-                    boundsExplicitlySet = true;
-                    updateMapBounds();
-                    lblStatus.Text = $"✅ {name}邊界已設定: {val}";
-                    lblStatus.ForeColor = Color.Lime;
-                }
-                else
-                {
-                    MessageBox.Show("偵測失敗！請先點擊預覽圖學習角色圖標顏色", "偵測失敗", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                }
-            };
-
-            btnSetLeft.Click += (s, e) => setBoundary("左", v => boundLeft = v, lblBoundLeft);
-            btnSetRight.Click += (s, e) => setBoundary("右", v => boundRight = v, lblBoundRight);
-            btnSetTop.Click += (s, e) => setBoundary("上", v => boundTop = v, lblBoundTop);
-            btnSetBottom.Click += (s, e) => setBoundary("下", v => boundBottom = v, lblBoundBottom);
-
-            btnResetBounds.Click += (s, e) =>
-            {
-                boundLeft = 0; boundRight = (int)numW.Value; boundTop = 0; boundBottom = (int)numH.Value;
-                boundsExplicitlySet = false;
-                lblBoundLeft.Text = "左: ---"; lblBoundRight.Text = "右: ---";
-                lblBoundTop.Text = "上: ---"; lblBoundBottom.Text = "下: ---";
-                lblBoundLeft.ForeColor = lblBoundRight.ForeColor = lblBoundTop.ForeColor = lblBoundBottom.ForeColor = Color.LightGray;
-                updateMapBounds();
-            };
-
-            btnTest.Click += (s, e) =>
-            {
-                updateRegion();
-                updateMapBounds();
-                updateColorSettings();
-
-                var (px, py, success) = detectCurrentPixelPos();
-                if (success)
-                {
-                    if (boundsExplicitlySet)
-                    {
-                        int boundsTolerance = 5; // 邊界判定容差(px)，避免偵測抖動
-                        bool inBounds = px >= (boundLeft - boundsTolerance) && px <= (boundRight + boundsTolerance) &&
-                                        py >= (boundTop - boundsTolerance) && py <= (boundBottom + boundsTolerance);
-                        // 計算到最近邊界的距離（負數=超出）
-                        int dL = px - boundLeft, dR = boundRight - px, dT = py - boundTop, dB = boundBottom - py;
-                        int minDist = Math.Min(Math.Min(dL, dR), Math.Min(dT, dB));
-                        string distInfo = inBounds ? "" : $" (偏移{Math.Abs(minDist)}px)";
-                        lblDetectResult.Text = $"位置: ({px}, {py})\n{(inBounds ? "✅ 在範圍內" : $"⚠️ 超出範圍{distInfo}")}\n信心度: {minimapTracker.DetectionConfidence}%";
-                        lblDetectResult.ForeColor = inBounds ? Color.Lime : Color.Orange;
-                    }
-                    else
-                    {
-                        // 未設定邊界時只顯示位置和信心度，不做範圍判定
-                        lblDetectResult.Text = $"位置: ({px}, {py})\n📍 (未設定活動範圍)\n信心度: {minimapTracker.DetectionConfidence}%";
-                        lblDetectResult.ForeColor = Color.Lime;
                     }
 
-                    using (var debugBmp = minimapTracker.CreateDebugImage())
+                    if (bestXAddr == IntPtr.Zero)
                     {
-                        if (debugBmp != null)
+                        setResult("❌ 未能找到 X 座標", Color.Red);
+                        addAutoLog("❌ X 座標未找到");
+                        return;
+                    }
+
+                    setProgress(80);
+
+                    // ========== 智慧選取 Y 座標 ==========
+                    setStep("尋找 Y 座標候選...");
+                    addAutoLog("開始尋找 Y 座標候選...");
+
+                    IntPtr savedXAddr = bestXAddr;
+                    IntPtr bestYAddr = IntPtr.Zero;
+                    int bestYValue = 0;
+
+                    // 收集 Y 候選：鄰近搜尋 + 全記憶體篩選合併
+                    var allYCandidates = new List<MemoryScanner.ScanResult>();
+
+                    // 策略 A：鄰近搜尋 — X/Y 通常在同一結構體中相鄰
+                    var nearbyCandidates = scanner.FindCoordinateNearby(savedXAddr, 256, -30000, 30000);
+                    foreach (var c in nearbyCandidates)
+                        allYCandidates.Add(c);
+                    addAutoLog($"X 位址附近候選：{nearbyCandidates.Count} 個");
+
+                    // 策略 B：快照比較法補充
+                    setInstruction("🧍 站著不動，掃描 Y 座標...");
+                    int snapSize = scanner.TakeSnapshot();
+                    if (snapSize > 0)
+                    {
+                        if (!waitWithCountdown(2, "🧍 站著不動！")) return;
+                        int snapCount = scanner.CompareSnapshotUnchanged(-30000, 30000);
+                        if (snapCount > 0)
                         {
-                            picDebug.Image?.Dispose();
-                            picDebug.Image = new Bitmap(debugBmp);
+                            // 跳躍篩選 — 多次取樣確認有持續變化
+                            setInstruction("⬆️ 跳躍！多跳幾下！");
+                            setCountdown("跳！");
+                            Thread.Sleep(300);
+                            addAutoLog("多次取樣驗證跳躍變化（2.5 秒）...");
+                            scanner.RefreshValues();
+                            // 跳躍時 Y 先減後增（上升再落下），用 FilterChanged 找有變化的
+                            int jumpDuration = 2500;
+                            int jumpInterval = 100;
+                            int jumpSamples = jumpDuration / jumpInterval;
+                            // 手動多次取樣檢查是否有持續變化
+                            {
+                                var jumpHistory = new int[scanner.Results.Count][];
+                                var candidates_y = scanner.Results;
+                                for (int ci = 0; ci < candidates_y.Count; ci++)
+                                    jumpHistory[ci] = new int[jumpSamples];
+                                for (int s = 0; s < jumpSamples; s++)
+                                {
+                                    for (int ci = 0; ci < candidates_y.Count; ci++)
+                                    {
+                                        if (scanner.ReadInt32(candidates_y[ci].Address, out int val))
+                                            jumpHistory[ci][s] = val;
+                                        else
+                                            jumpHistory[ci][s] = int.MinValue;
+                                    }
+                                    if (s < jumpSamples - 1) Thread.Sleep(jumpInterval);
+                                }
+                                setCountdown("");
+                                // 只保留有足夠變化次數的（≥30% 取樣有變化）
+                                var jumpFiltered = new List<MemoryScanner.ScanResult>();
+                                for (int ci = 0; ci < candidates_y.Count; ci++)
+                                {
+                                    int chgCnt = 0;
+                                    for (int s = 1; s < jumpSamples; s++)
+                                        if (jumpHistory[ci][s] != jumpHistory[ci][s - 1]) chgCnt++;
+                                    if (chgCnt >= jumpSamples * 0.25)
+                                        jumpFiltered.Add(new MemoryScanner.ScanResult
+                                        {
+                                            Address = candidates_y[ci].Address,
+                                            Value = jumpHistory[ci][^1],
+                                            PreviousValue = jumpHistory[ci][0]
+                                        });
+                                }
+                                scanner.Results.Clear();
+                                scanner.Results.AddRange(jumpFiltered);
+                            }
+                            addAutoLog($"跳躍篩選（多次取樣）→ 剩餘 {scanner.Results.Count:N0}");
+
+                            // 落地靜止 — 多次取樣確認穩定
+                            setInstruction("🧍 落地後站著不動！");
+                            if (!waitWithCountdown(3, "🧍 落地後站著不動！")) return;
+                            addAutoLog("多次取樣驗證穩定性（1.5 秒）...");
+                            scanner.FilterStable(1500, 150);
+                            addAutoLog($"靜止篩選（多次取樣穩定）→ 剩餘 {scanner.Results.Count:N0}");
+
+                            // 水平移動排除 X — 多次取樣確認不變
+                            if (scanner.Results.Count > 3)
+                            {
+                                if (!waitWithCountdown(2, "👉 準備往右走！")) return;
+                                setInstruction("👉 一直往右走！持續走！");
+                                Thread.Sleep(800); // 確保角色已開始移動
+                                addAutoLog("多次取樣驗證水平移動時不變（1.5 秒）...");
+                                scanner.FilterStable(1500, 100);
+                                addAutoLog($"水平移動篩選（多次取樣穩定）→ 剩餘 {scanner.Results.Count:N0}");
+                            }
+                            // 合併結果（排除 X 位址和已有的鄰近候選）
+                            var existingAddrs = new HashSet<long>(allYCandidates.Select(c => c.Address.ToInt64()));
+                            existingAddrs.Add(savedXAddr.ToInt64());
+                            foreach (var r in scanner.Results.Where(r => !existingAddrs.Contains(r.Address.ToInt64())).Take(30))
+                                allYCandidates.Add(r);
+                            addAutoLog($"快照篩選補充後，Y 候選共 {allYCandidates.Count} 個");
+                        }
+                    }
+
+                    setProgress(85);
+
+                    if (allYCandidates.Count > 0)
+                    {
+                        addAutoLog($"開始 Y 座標自動評分（{allYCandidates.Count} 個候選）...");
+                        setStep("自動評分 Y 座標...");
+
+                        // --- 靜止取樣 ---
+                        setInstruction("🧍 站著不動！驗證穩定性...");
+                        var yStillSamples = scanner.RapidSample(allYCandidates, 1500, 150);
+
+                        // 淘汰靜止不穩定的
+                        var yStable = new List<(int index, MemoryScanner.ScanResult candidate)>();
+                        for (int i = 0; i < allYCandidates.Count; i++)
+                        {
+                            int[] samples = yStillSamples[i];
+                            if (samples.All(v => v == samples[0]) && samples[0] >= -30000 && samples[0] <= 30000)
+                                yStable.Add((i, allYCandidates[i]));
+                        }
+                        addAutoLog($"Y 靜止穩定性淘汰 → 剩餘 {yStable.Count} 個");
+
+                        if (yStable.Count > 0)
+                        {
+                            // --- 跳躍取樣 ---
+                            if (!waitWithCountdown(2, "⬆️ 準備跳躍！")) return;
+                            setInstruction("⬆️ 跳躍！多跳幾下！");
+                            setCountdown("跳！");
+                            Thread.Sleep(500);
+                            var yJumpSamples = scanner.RapidSample(
+                                yStable.Select(c => c.candidate).ToList(), 2500, 100);
+                            setCountdown("");
+
+                            // --- 再次靜止驗證 ---
+                            setInstruction("🧍 落地後站著不動！");
+                            if (!waitWithCountdown(2, "🧍 落地後站著不動！")) return;
+                            var yStill2 = scanner.RapidSample(
+                                yStable.Select(c => c.candidate).ToList(), 1000, 150);
+
+                            // --- 評分 ---
+                            var yScored = new List<(MemoryScanner.ScanResult candidate, double score, int origIndex)>();
+                            for (int i = 0; i < yStable.Count; i++)
+                            {
+                                double s = MemoryScanner.ScoreCoordinate(
+                                    yStillSamples[yStable[i].index],
+                                    yJumpSamples[i],
+                                    expectIncrease: null); // Y 跳躍方向不固定
+                                int[] s2 = yStill2[i];
+                                if (s2.Distinct().Count() > 2) s *= 0.3;
+                                yScored.Add((yStable[i].candidate, s, yStable[i].index));
+                            }
+                            yScored = yScored.OrderByDescending(x => x.score).ToList();
+
+                            if (yScored.Count > 0)
+                            {
+                                addAutoLog($"Y 評分排名：");
+                                foreach (var (c, sc, _) in yScored.Take(5))
+                                    addAutoLog($"  0x{c.Address.ToInt64():X8} = {c.Value}, 分數={sc:F0}");
+                            }
+
+                            // 自動選取判定
+                            if (yScored.Count > 0 && yScored[0].score >= 70)
+                            {
+                                double topScore = yScored[0].score;
+                                double secondScore = yScored.Count > 1 ? yScored[1].score : 0;
+                                if (topScore >= 85 || (topScore - secondScore) >= 20)
+                                {
+                                    bestYAddr = yScored[0].candidate.Address;
+                                    scanner.ReadInt32(bestYAddr, out bestYValue);
+                                    long yOff = bestYAddr.ToInt64() - savedXAddr.ToInt64();
+                                    addAutoLog($"✅ 自動選取 Y: 0x{bestYAddr.ToInt64():X8} = {bestYValue} (偏移 X{(yOff >= 0 ? "+" : "")}{yOff}, 分數 {topScore:F0})");
+                                }
+                            }
+
+                            // 無法自動決定 → 手動選取
+                            if (bestYAddr == IntPtr.Zero)
+                            {
+                                addAutoLog("⚠️ Y 無法自動決定，開啟手動選取...");
+                                setStep("請手動選取 Y 座標");
+                                setInstruction("自動評分不確定\n請在監控視窗中手動選取");
+
+                                var ySorted = yScored.Select(x => x.candidate).ToList();
+                                var yScores = yScored.Select(x => x.score).ToList();
+
+                                MemoryScanner.ScanResult? yPick = null;
+                                autoForm.Invoke(new Action(() =>
+                                {
+                                    yPick = ShowCandidatePicker(scanner, ySorted,
+                                        "⬆️ 選取 Y 座標（垂直位置）",
+                                        "跳躍或爬梯子，觀察哪個值跟著變化\n找到後點擊該行，再按「確認選取」",
+                                        yScores);
+                                }));
+
+                                if (yPick != null)
+                                {
+                                    bestYAddr = yPick.Address;
+                                    scanner.ReadInt32(bestYAddr, out bestYValue);
+                                    long yOff = bestYAddr.ToInt64() - savedXAddr.ToInt64();
+                                    addAutoLog($"✅ Y 已手動選取: 0x{bestYAddr.ToInt64():X8} = {bestYValue} (偏移 X{(yOff >= 0 ? "+" : "")}{yOff})");
+                                }
+                                else
+                                {
+                                    addAutoLog("⚠️ Y 座標未選取");
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        addAutoLog("⚠️ 未找到 Y 候選位址");
+                    }
+
+                    setProgress(95);
+
+                    // ========== 保存結果 ==========
+                    setProgress(100);
+                    scanner.ConfirmedXAddress = savedXAddr;
+                    if (bestYAddr != IntPtr.Zero)
+                        scanner.ConfirmedYAddress = bestYAddr;
+
+                    scanner.SaveAddresses(AddressFilePath);
+
+                    // 驗證
+                    var (fx, fy, fok) = scanner.ReadPosition();
+                    if (fok)
+                    {
+                        setResult($"✅ 完成！ X={fx}, Y={fy}", Color.Lime);
+                        addAutoLog($"🎉 掃描完成！座標: ({fx}, {fy})");
+                        setStep("✅ 掃描完成！");
+                        setInstruction($"座標: X={fx}, Y={fy}\n位址已自動儲存 ✔");
+
+                        autoForm.BeginInvoke(new Action(() =>
+                        {
+                            AddLog($"🎉 掃描完成：X=0x{savedXAddr.ToInt64():X}({fx}), Y=0x{bestYAddr.ToInt64():X}({fy})");
+                        }));
+                    }
+                    else if (savedXAddr != IntPtr.Zero)
+                    {
+                        scanner.ReadInt32(savedXAddr, out int xv);
+                        setResult($"⚠️ 部分完成！ X={xv}", Color.Orange);
+                        addAutoLog($"部分完成：僅找到 X 座標");
+                        setStep("⚠️ 部分完成");
+                        setInstruction($"僅找到 X 座標: {xv}\nY 座標請使用手動掃描");
+
+                        autoForm.BeginInvoke(new Action(() =>
+                        {
+                            AddLog($"⚠️ 掃描部分完成：僅找到 X");
+                        }));
+                    }
+                    else
+                    {
+                        setResult("❌ 掃描失敗", Color.Red);
+                        setStep("❌ 掃描失敗");
+                        setInstruction("請嘗試手動掃描");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    addAutoLog($"❌ 錯誤: {ex.Message}");
+                    setResult($"❌ 錯誤: {ex.Message}", Color.Red);
+                    setStep("❌ 掃描失敗");
+                }
+                finally
+                {
+                    // 恢復按鈕狀態
+                    autoForm.BeginInvoke(new Action(() =>
+                    {
+                        btnStart.Enabled = true;
+                        btnStart.Text = "🔄 重新掃描";
+                        btnClose.Enabled = true;
+                    }));
+                }
+            }
+
+            btnStart.Click += (s, args) =>
+            {
+                cancelFlag[0] = false;
+                btnStart.Enabled = false;
+                btnClose.Enabled = false;
+                lstAutoLog.Items.Clear();
+                lblResult.Text = "";
+                progressBar.Value = 0;
+
+                Thread autoThread = new Thread(AutoScanWorker) { IsBackground = true };
+                autoThread.Start();
+            };
+
+            btnClose.Click += (s, args) =>
+            {
+                cancelFlag[0] = true;
+                autoForm.Close();
+            };
+
+            autoForm.FormClosing += (s, args) =>
+            {
+                cancelFlag[0] = true;
+            };
+
+            autoForm.Controls.AddRange(new Control[]
+            {
+                lblStep, lblInstruction, lblCountdown, progressBar,
+                lstAutoLog, lblResult, btnStart, btnClose
+            });
+
+            autoForm.ShowDialog();
+        }
+
+        /// <summary>
+        /// 即時候選位址監控視窗 — 使用者觀察值的變化來選取正確的座標位址
+        /// 每 200ms 更新所有候選的當前值，使用者移動角色後可直觀看出哪個是真的座標
+        /// </summary>
+        private MemoryScanner.ScanResult? ShowCandidatePicker(
+            MemoryScanner scanner,
+            List<MemoryScanner.ScanResult> candidates,
+            string title,
+            string hint,
+            List<double>? scores = null)
+        {
+            MemoryScanner.ScanResult? selectedResult = null;
+
+            Form pickerForm = new Form
+            {
+                Text = title,
+                Width = 620,
+                Height = 520,
+                StartPosition = FormStartPosition.CenterParent,
+                Owner = this,
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                MaximizeBox = false,
+                MinimizeBox = false,
+                BackColor = Color.FromArgb(35, 35, 40)
+            };
+
+            Label lblHint = new Label
+            {
+                Text = hint,
+                Left = 15,
+                Top = 10,
+                Width = 575,
+                Height = 45,
+                ForeColor = Color.FromArgb(200, 220, 255),
+                Font = new Font("Microsoft JhengHei UI", 10F),
+                TextAlign = ContentAlignment.MiddleLeft
+            };
+
+            // 使用 ListView（虛擬模式不閃爍、高效更新）
+            ListView lv = new ListView
+            {
+                Left = 15,
+                Top = 60,
+                Width = 575,
+                Height = 340,
+                View = View.Details,
+                FullRowSelect = true,
+                GridLines = true,
+                MultiSelect = false,
+                BackColor = Color.FromArgb(25, 25, 30),
+                ForeColor = Color.White,
+                Font = new Font("Consolas", 10F),
+                HeaderStyle = ColumnHeaderStyle.Nonclickable
+            };
+            lv.Columns.Add("位址", 130);
+            lv.Columns.Add("當前值", 100);
+            lv.Columns.Add("初始值", 100);
+            lv.Columns.Add("變化量", 80);
+            lv.Columns.Add("評分", 70);
+            lv.Columns.Add("偏移", 90);
+
+            // 記錄初始值
+            int[] initialValues = new int[candidates.Count];
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                scanner.ReadInt32(candidates[i].Address, out initialValues[i]);
+            }
+
+            // 填入初始資料
+            lv.BeginUpdate();
+            long refAddr = candidates.Count > 0 ? candidates[0].Address.ToInt64() : 0;
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                var c = candidates[i];
+                scanner.ReadInt32(c.Address, out int currentVal);
+                long offset = c.Address.ToInt64() - refAddr;
+                string scoreText = scores != null && i < scores.Count ? $"{scores[i]:F0}" : "-";
+                var item = new ListViewItem(new string[]
+                {
+                    $"0x{c.Address.ToInt64():X8}",
+                    currentVal.ToString(),
+                    initialValues[i].ToString(),
+                    "0",
+                    scoreText,
+                    offset == 0 ? "基準" : (offset > 0 ? $"+{offset}" : offset.ToString())
+                });
+                item.Tag = i;
+                // 高分候選標記顏色
+                if (scores != null && i < scores.Count && scores[i] >= 70)
+                    item.ForeColor = Color.Gold;
+                lv.Items.Add(item);
+            }
+            lv.EndUpdate();
+
+            // 預選第一個（最高分）
+            if (lv.Items.Count > 0)
+            {
+                lv.Items[0].Selected = true;
+                lv.EnsureVisible(0);
+            }
+
+            // 選中行的即時值大字顯示
+            Label lblLive = new Label
+            {
+                Left = 15,
+                Top = 408,
+                Width = 575,
+                Height = 30,
+                ForeColor = Color.Yellow,
+                Font = new Font("Consolas", 14F, FontStyle.Bold),
+                TextAlign = ContentAlignment.MiddleCenter,
+                Text = "← 點擊一行來追蹤"
+            };
+
+            Button btnConfirm = new Button
+            {
+                Text = "✅ 確認選取",
+                Left = 160,
+                Top = 445,
+                Width = 140,
+                Height = 35,
+                BackColor = Color.FromArgb(0, 140, 80),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Microsoft JhengHei UI", 10F, FontStyle.Bold),
+                Enabled = false
+            };
+
+            Button btnSkip = new Button
+            {
+                Text = "跳過",
+                Left = 320,
+                Top = 445,
+                Width = 100,
+                Height = 35,
+                BackColor = Color.FromArgb(80, 80, 85),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
+
+            // 選擇行時啟用確認按鈕
+            lv.SelectedIndexChanged += (s, args) =>
+            {
+                btnConfirm.Enabled = lv.SelectedIndices.Count > 0;
+            };
+
+            // 雙擊直接確認
+            lv.DoubleClick += (s, args) =>
+            {
+                if (lv.SelectedIndices.Count > 0)
+                {
+                    int idx = (int)lv.SelectedItems[0].Tag!;
+                    selectedResult = candidates[idx];
+                    pickerForm.Close();
+                }
+            };
+
+            btnConfirm.Click += (s, args) =>
+            {
+                if (lv.SelectedIndices.Count > 0)
+                {
+                    int idx = (int)lv.SelectedItems[0].Tag!;
+                    selectedResult = candidates[idx];
+                    pickerForm.Close();
+                }
+            };
+
+            btnSkip.Click += (s, args) =>
+            {
+                selectedResult = null;
+                pickerForm.Close();
+            };
+
+            // 定時更新（每 200ms 讀取並刷新所有值）
+            System.Windows.Forms.Timer refreshTimer = new System.Windows.Forms.Timer { Interval = 200 };
+            refreshTimer.Tick += (s, args) =>
+            {
+                try
+                {
+                    lv.BeginUpdate();
+                    for (int i = 0; i < candidates.Count && i < lv.Items.Count; i++)
+                    {
+                        if (scanner.ReadInt32(candidates[i].Address, out int val))
+                        {
+                            int delta = val - initialValues[i];
+                            lv.Items[i].SubItems[1].Text = val.ToString();
+                            lv.Items[i].SubItems[3].Text = delta == 0 ? "0" : (delta > 0 ? $"+{delta}" : delta.ToString());
+
+                            // 有變化的行標記顏色
+                            if (delta != 0)
+                                lv.Items[i].ForeColor = Color.Lime;
+                            else
+                                lv.Items[i].ForeColor = Color.White;
+                        }
+                        else
+                        {
+                            lv.Items[i].SubItems[1].Text = "???";
+                            lv.Items[i].ForeColor = Color.Red;
+                        }
+                    }
+                    lv.EndUpdate();
+
+                    // 更新選中行的大字顯示
+                    if (lv.SelectedIndices.Count > 0)
+                    {
+                        int selIdx = (int)lv.SelectedItems[0].Tag!;
+                        if (scanner.ReadInt32(candidates[selIdx].Address, out int selVal))
+                        {
+                            int selDelta = selVal - initialValues[selIdx];
+                            lblLive.Text = $"值: {selVal}    變化: {(selDelta >= 0 ? "+" : "")}{selDelta}";
                         }
                     }
                 }
-                else
+                catch { }
+            };
+
+            refreshTimer.Start();
+
+            pickerForm.FormClosing += (s, args) =>
+            {
+                refreshTimer.Stop();
+                refreshTimer.Dispose();
+            };
+
+            pickerForm.Controls.AddRange(new Control[] { lblHint, lv, lblLive, btnConfirm, btnSkip });
+            pickerForm.ShowDialog();
+
+            return selectedResult;
+        }
+
+        /// <summary>
+        /// 開啟記憶體掃描器（迷你版 Cheat Engine）
+        /// </summary>
+        private void OpenMemoryScanner()
+        {
+            if (targetWindowHandle == IntPtr.Zero || !IsWindow(targetWindowHandle))
+            {
+                MessageBox.Show("請先鎖定目標視窗！\n\n步驟：\n1. 開啟遊戲\n2. 點擊「手動鎖定」選擇遊戲視窗",
+                    "未鎖定視窗", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            // 初始化掃描器
+            if (memoryScanner == null)
+                memoryScanner = new MemoryScanner();
+
+            if (!memoryScanner.IsAttached)
+            {
+                if (!memoryScanner.AttachToWindow(targetWindowHandle))
                 {
-                    lblDetectResult.Text = "❌ 偵測失敗\n請先學習顏色";
-                    lblDetectResult.ForeColor = Color.Red;
+                    MessageBox.Show("無法開啟目標進程！\n\n請嘗試以管理員身份執行。",
+                        "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+            }
+
+            // 嘗試載入已儲存的位址
+            bool hasLoadedAddresses = memoryScanner.LoadAddresses(AddressFilePath);
+            if (hasLoadedAddresses && memoryScanner.ValidateAddresses())
+            {
+                AddLog("已載入先前儲存的座標位址");
+            }
+            else
+            {
+                memoryScanner.ConfirmedXAddress = IntPtr.Zero;
+                memoryScanner.ConfirmedYAddress = IntPtr.Zero;
+            }
+
+            Form scanForm = new Form
+            {
+                Text = "🔍 位置掃描器（迷你 CE）",
+                Width = 750,
+                Height = 700,
+                StartPosition = FormStartPosition.CenterParent,
+                Owner = this,
+                FormBorderStyle = FormBorderStyle.Sizable,
+                MinimizeBox = false,
+                BackColor = Color.FromArgb(45, 45, 48)
+            };
+
+            // ===== 步驟說明 =====
+            Label lblGuide = new Label
+            {
+                Text = "【找座標步驟】\n" +
+                       "1. 在遊戲中記下角色的 X 座標（對話框、@pos 指令、或目測估計）\n" +
+                       "2. 輸入該值 → 點「首次掃描」\n" +
+                       "3. 移動角色 → 點「值已改變」篩選\n" +
+                       "4. 站住不動 → 點「值未改變」篩選\n" +
+                       "5. 重複步驟 3-4 直到剩餘少量結果\n" +
+                       "6. 選擇正確位址 → 點「確認為 X/Y 座標」",
+                Left = 15,
+                Top = 10,
+                Width = 700,
+                Height = 100,
+                ForeColor = Color.FromArgb(200, 220, 255),
+                Font = new Font("Microsoft JhengHei UI", 9F)
+            };
+
+            // ===== 掃描輸入區 =====
+            Label lblValue = new Label { Text = "搜尋值：", Left = 15, Top = 118, Width = 60, ForeColor = Color.White };
+            TextBox txtScanValue = new TextBox
+            {
+                Left = 80,
+                Top = 115,
+                Width = 100,
+                BackColor = Color.FromArgb(60, 60, 65),
+                ForeColor = Color.LightGreen,
+                Font = new Font("Consolas", 10F)
+            };
+
+            Label lblTolerance = new Label { Text = "容差：", Left = 190, Top = 118, Width = 45, ForeColor = Color.Gray };
+            NumericUpDown numTolerance = new NumericUpDown
+            {
+                Left = 240,
+                Top = 115,
+                Width = 60,
+                Minimum = 0,
+                Maximum = 100,
+                Value = 0,
+                BackColor = Color.FromArgb(60, 60, 65),
+                ForeColor = Color.White
+            };
+
+            Button btnFirstScan = new Button
+            {
+                Text = "首次掃描",
+                Left = 310,
+                Top = 113,
+                Width = 85,
+                Height = 28,
+                BackColor = Color.FromArgb(0, 122, 204),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
+
+            Button btnScanRange = new Button
+            {
+                Text = "範圍掃描",
+                Left = 400,
+                Top = 113,
+                Width = 85,
+                Height = 28,
+                BackColor = Color.FromArgb(80, 100, 140),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
+
+            Button btnNewScan = new Button
+            {
+                Text = "重新掃描",
+                Left = 490,
+                Top = 113,
+                Width = 85,
+                Height = 28,
+                BackColor = Color.FromArgb(120, 80, 40),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
+
+            // ===== 篩選按鈕區 =====
+            Label lblFilter = new Label
+            {
+                Text = "篩選：",
+                Left = 15,
+                Top = 152,
+                Width = 50,
+                ForeColor = Color.Cyan,
+                Font = new Font("Microsoft JhengHei UI", 9F, FontStyle.Bold)
+            };
+
+            Button btnFilterChanged = new Button
+            {
+                Text = "值已改變",
+                Left = 70,
+                Top = 148,
+                Width = 80,
+                Height = 28,
+                BackColor = Color.FromArgb(150, 100, 50),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Enabled = false
+            };
+            Button btnFilterUnchanged = new Button
+            {
+                Text = "值未改變",
+                Left = 155,
+                Top = 148,
+                Width = 80,
+                Height = 28,
+                BackColor = Color.FromArgb(50, 120, 80),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Enabled = false
+            };
+            Button btnFilterIncreased = new Button
+            {
+                Text = "值增加",
+                Left = 240,
+                Top = 148,
+                Width = 70,
+                Height = 28,
+                BackColor = Color.FromArgb(100, 80, 130),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Enabled = false
+            };
+            Button btnFilterDecreased = new Button
+            {
+                Text = "值減少",
+                Left = 315,
+                Top = 148,
+                Width = 70,
+                Height = 28,
+                BackColor = Color.FromArgb(100, 80, 130),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Enabled = false
+            };
+            Button btnFilterExact = new Button
+            {
+                Text = "精確值",
+                Left = 390,
+                Top = 148,
+                Width = 70,
+                Height = 28,
+                BackColor = Color.FromArgb(80, 80, 130),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Enabled = false
+            };
+            Button btnRefreshValues = new Button
+            {
+                Text = "刷新值",
+                Left = 465,
+                Top = 148,
+                Width = 70,
+                Height = 28,
+                BackColor = Color.FromArgb(60, 60, 65),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Enabled = false
+            };
+
+            // ===== 結果標籤 =====
+            Label lblResultCount = new Label
+            {
+                Text = "結果: 0",
+                Left = 550,
+                Top = 152,
+                Width = 180,
+                ForeColor = Color.Yellow,
+                Font = new Font("Microsoft JhengHei UI", 9F, FontStyle.Bold)
+            };
+
+            // ===== 結果列表 =====
+            DataGridView dgv = new DataGridView
+            {
+                Left = 15,
+                Top = 185,
+                Width = 700,
+                Height = 280,
+                BackgroundColor = Color.FromArgb(30, 30, 35),
+                ForeColor = Color.White,
+                GridColor = Color.FromArgb(60, 60, 65),
+                BorderStyle = BorderStyle.FixedSingle,
+                AllowUserToAddRows = false,
+                AllowUserToDeleteRows = false,
+                ReadOnly = true,
+                SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+                RowHeadersVisible = false,
+                AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+                ColumnHeadersDefaultCellStyle = new DataGridViewCellStyle
+                {
+                    BackColor = Color.FromArgb(50, 50, 55),
+                    ForeColor = Color.White
+                },
+                DefaultCellStyle = new DataGridViewCellStyle
+                {
+                    BackColor = Color.FromArgb(40, 40, 45),
+                    ForeColor = Color.White,
+                    SelectionBackColor = Color.FromArgb(0, 100, 180),
+                    Font = new Font("Consolas", 9F)
                 }
             };
 
-            // 連續測試
-            btnAutoTest.Click += (s, e) =>
+            dgv.Columns.Add("Address", "位址");
+            dgv.Columns.Add("Value", "當前值");
+            dgv.Columns.Add("Previous", "上次值");
+            dgv.Columns.Add("Diff", "變化");
+            dgv.Columns["Address"]!.FillWeight = 30;
+            dgv.Columns["Value"]!.FillWeight = 25;
+            dgv.Columns["Previous"]!.FillWeight = 25;
+            dgv.Columns["Diff"]!.FillWeight = 20;
+
+            // 刷新結果列表（最多顯示 500 筆，太多會卡頓）
+            Action refreshResults = () =>
             {
-                if (autoTestTimer == null)
+                dgv.SuspendLayout();
+                dgv.Rows.Clear();
+                int showCount = Math.Min(memoryScanner!.Results.Count, 500);
+                for (int i = 0; i < showCount; i++)
                 {
-                    autoTestTimer = new System.Windows.Forms.Timer { Interval = 200 };
-                    autoTestTimer.Tick += (ts, te) => btnTest.PerformClick();
-                    autoTestTimer.Start();
-                    btnAutoTest.Text = "⏹ 停止";
-                    btnAutoTest.BackColor = Color.FromArgb(150, 80, 80);
+                    var r = memoryScanner.Results[i];
+                    string diff = r.Value != r.PreviousValue ? $"{r.Value - r.PreviousValue:+#;-#;0}" : "";
+                    dgv.Rows.Add(
+                        $"0x{r.Address.ToInt64():X}",
+                        r.Value.ToString(),
+                        r.PreviousValue.ToString(),
+                        diff
+                    );
+
+                    // 變化的值用不同顏色
+                    if (r.Value != r.PreviousValue)
+                    {
+                        dgv.Rows[dgv.Rows.Count - 1].DefaultCellStyle.ForeColor = Color.FromArgb(255, 180, 100);
+                    }
                 }
-                else
-                {
-                    autoTestTimer.Stop();
-                    autoTestTimer.Dispose();
-                    autoTestTimer = null;
-                    btnAutoTest.Text = "🔄 連續測試";
-                    btnAutoTest.BackColor = Color.FromArgb(80, 80, 90);
-                }
+                dgv.ResumeLayout();
+
+                string suffix = memoryScanner.Results.Count > 500 ? $" (顯示前 500)" : "";
+                lblResultCount.Text = $"結果: {memoryScanner.Results.Count}{suffix}";
+
+                bool hasResults = memoryScanner.Results.Count > 0;
+                btnFilterChanged.Enabled = hasResults;
+                btnFilterUnchanged.Enabled = hasResults;
+                btnFilterIncreased.Enabled = hasResults;
+                btnFilterDecreased.Enabled = hasResults;
+                btnFilterExact.Enabled = hasResults;
+                btnRefreshValues.Enabled = hasResults;
             };
 
-            btnCorrection.Click += (s, e) => { OpenPositionCorrectionSettings(); };
-
-            btnSave.Click += (s, e) =>
+            // ===== 掃描按鈕事件 =====
+            btnFirstScan.Click += (s, args) =>
             {
-                updateRegion();
-                updateMapBounds();
-                updateColorSettings();
-
-                if (minimapTracker.MinimapRegion.Width <= 0)
+                if (!int.TryParse(txtScanValue.Text.Trim(), out int target))
                 {
-                    MessageBox.Show("請先設定小地圖區域！", "錯誤", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    MessageBox.Show("請輸入有效的整數！", "輸入錯誤", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
                 }
 
-                minimapTracker.SaveCalibration(CalibrationFilePath);
-                lblStatus.Text = "✅ 校準設定已儲存！";
-                lblStatus.ForeColor = Color.Lime;
-                AddLog("💾 小地圖校準設定已儲存");
+                scanForm.Cursor = Cursors.WaitCursor;
+                lblResultCount.Text = "掃描中...";
+                Application.DoEvents();
+
+                int tolerance = (int)numTolerance.Value;
+                int count = memoryScanner!.FirstScan(target, tolerance);
+
+                scanForm.Cursor = Cursors.Default;
+                refreshResults();
+                AddLog($"🔍 首次掃描: 值={target}, 容差={tolerance}, 結果={count}");
             };
 
-            btnClose.Click += (s, e) => calibForm.Close();
-
-            calibForm.FormClosing += (s, e) =>
+            btnScanRange.Click += (s, args) =>
             {
-                autoTestTimer?.Stop();
-                autoTestTimer?.Dispose();
-                boundarySyncTimer?.Stop();
-                boundarySyncTimer?.Dispose();
-                currentMinimapBitmap?.Dispose();
-                _boundarySetState = -1; // 重置 F7 狀態機
-            };
-
-            // 初始化
-            updateRegion();
-            updateMapBounds();
-
-            calibForm.Controls.AddRange(new Control[] { grpPreview, grpRegion, grpBounds, grpColor, grpResult, btnCorrection, btnSave, btnClose, lblStatus });
-            calibForm.ShowDialog();
-        }
-
-        // HSV 轉 Color
-        private static Color ColorFromHSV(double hue, double saturation, double value)
-        {
-            int hi = Convert.ToInt32(Math.Floor(hue / 60)) % 6;
-            double f = hue / 60 - Math.Floor(hue / 60);
-            value = value * 255;
-            int v = Convert.ToInt32(value);
-            int p = Convert.ToInt32(value * (1 - saturation));
-            int q = Convert.ToInt32(value * (1 - f * saturation));
-            int t = Convert.ToInt32(value * (1 - (1 - f) * saturation));
-            return hi switch
-            {
-                0 => Color.FromArgb(255, v, t, p),
-                1 => Color.FromArgb(255, q, v, p),
-                2 => Color.FromArgb(255, p, v, t),
-                3 => Color.FromArgb(255, p, q, v),
-                4 => Color.FromArgb(255, t, p, v),
-                _ => Color.FromArgb(255, v, p, q)
-            };
-        }
-
-        // Color 轉 HSV
-        private static void ColorToHSV(Color color, out float hue, out float saturation, out float value)
-        {
-            float r = color.R / 255f;
-            float g = color.G / 255f;
-            float b = color.B / 255f;
-            float max = Math.Max(r, Math.Max(g, b));
-            float min = Math.Min(r, Math.Min(g, b));
-            float delta = max - min;
-
-            hue = 0;
-            if (delta > 0)
-            {
-                if (max == r) hue = 60 * (((g - b) / delta) % 6);
-                else if (max == g) hue = 60 * (((b - r) / delta) + 2);
-                else hue = 60 * (((r - g) / delta) + 4);
-            }
-            if (hue < 0) hue += 360;
-
-            saturation = max == 0 ? 0 : delta / max;
-            value = max;
-        }
-
-        /// <summary>
-        /// 執行位置修正（偏差模式 - 比對錄製時的參考位置）
-        /// </summary>
-        private CorrectionResult? ExecutePositionCorrection()
-        {
-            if (minimapTracker == null || !minimapTracker.IsCalibrated)
-                return null;
-
-            if (positionCorrector == null)
-            {
-                positionCorrector = new PositionCorrector();
-                positionCorrector.OnLog += (msg) =>
+                string input = txtScanValue.Text.Trim();
+                // 支援 "100~200" 或 "100-200" 格式
+                string[] parts = input.Split('~', '-');
+                if (parts.Length != 2 || !int.TryParse(parts[0].Trim(), out int min) || !int.TryParse(parts[1].Trim(), out int max))
                 {
-                    try { this.BeginInvoke(new Action(() => AddLog($"[修正] {msg}"))); } catch { }
-                };
-            }
-
-            ApplyCorrectorSettings(positionCorrector);
-
-            // ★ 偏差修正：使用參考位置
-            var (refX, refY, refSet) = positionCorrector.GetReferencePosition();
-            if (!refSet)
-            {
-                var readings = new List<(int x, int y)>();
-                for (int i = 0; i < 3; i++)
-                {
-                    var (rx, ry, rok) = minimapTracker.ReadPosition();
-                    if (rok) readings.Add((rx, ry));
-                    Thread.Sleep(80);
+                    MessageBox.Show("範圍格式：最小值~最大值\n例如：100~500", "輸入錯誤", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
                 }
 
-                if (readings.Count >= 2)
+                scanForm.Cursor = Cursors.WaitCursor;
+                lblResultCount.Text = "掃描中...";
+                Application.DoEvents();
+
+                int count = memoryScanner!.FirstScanRange(min, max);
+
+                scanForm.Cursor = Cursors.Default;
+                refreshResults();
+                AddLog($"🔍 範圍掃描: {min}~{max}, 結果={count}");
+            };
+
+            btnNewScan.Click += (s, args) =>
+            {
+                memoryScanner!.Results.Clear();
+                refreshResults();
+                AddLog("🔄 已清除掃描結果");
+            };
+
+            btnFilterChanged.Click += (s, args) =>
+            {
+                int count = memoryScanner!.FilterChanged();
+                refreshResults();
+                AddLog($"篩選「值已改變」→ 剩餘 {count}");
+            };
+
+            btnFilterUnchanged.Click += (s, args) =>
+            {
+                int count = memoryScanner!.FilterUnchanged();
+                refreshResults();
+                AddLog($"篩選「值未改變」→ 剩餘 {count}");
+            };
+
+            btnFilterIncreased.Click += (s, args) =>
+            {
+                int count = memoryScanner!.FilterIncreased();
+                refreshResults();
+                AddLog($"篩選「值增加」→ 剩餘 {count}");
+            };
+
+            btnFilterDecreased.Click += (s, args) =>
+            {
+                int count = memoryScanner!.FilterDecreased();
+                refreshResults();
+                AddLog($"篩選「值減少」→ 剩餘 {count}");
+            };
+
+            btnFilterExact.Click += (s, args) =>
+            {
+                if (!int.TryParse(txtScanValue.Text.Trim(), out int target))
                 {
-                    readings.Sort((a, b) => a.x.CompareTo(b.x));
-                    int medX = readings[readings.Count / 2].x;
-                    readings.Sort((a, b) => a.y.CompareTo(b.y));
-                    int medY = readings[readings.Count / 2].y;
-                    positionCorrector.SetReferencePosition(medX, medY);
+                    MessageBox.Show("請輸入有效的整數！", "輸入錯誤", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                int count = memoryScanner!.FilterExact(target);
+                refreshResults();
+                AddLog($"篩選「精確值={target}」→ 剩餘 {count}");
+            };
 
-                    try
+            btnRefreshValues.Click += (s, args) =>
+            {
+                memoryScanner!.RefreshValues();
+                refreshResults();
+            };
+
+            // ===== 確認按鈕區 =====
+            Label lblConfirm = new Label
+            {
+                Text = "確認座標：",
+                Left = 15,
+                Top = 478,
+                Width = 80,
+                ForeColor = Color.FromArgb(100, 220, 160),
+                Font = new Font("Microsoft JhengHei UI", 9F, FontStyle.Bold)
+            };
+
+            Button btnConfirmX = new Button
+            {
+                Text = "✔ 確認為 X 座標",
+                Left = 100,
+                Top = 474,
+                Width = 130,
+                Height = 28,
+                BackColor = Color.FromArgb(0, 150, 80),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
+            Button btnConfirmY = new Button
+            {
+                Text = "✔ 確認為 Y 座標",
+                Left = 235,
+                Top = 474,
+                Width = 130,
+                Height = 28,
+                BackColor = Color.FromArgb(0, 120, 150),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
+            Button btnSaveAddr = new Button
+            {
+                Text = "💾 儲存位址",
+                Left = 370,
+                Top = 474,
+                Width = 100,
+                Height = 28,
+                BackColor = Color.FromArgb(60, 120, 80),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
+            Button btnLoadAddr = new Button
+            {
+                Text = "📂 載入位址",
+                Left = 475,
+                Top = 474,
+                Width = 100,
+                Height = 28,
+                BackColor = Color.FromArgb(80, 100, 140),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
+
+            btnConfirmX.Click += (s, args) =>
+            {
+                if (dgv.SelectedRows.Count == 0)
+                {
+                    MessageBox.Show("請先在列表中選擇一個位址！", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+                int selectedIndex = dgv.SelectedRows[0].Index;
+                if (selectedIndex < memoryScanner!.Results.Count)
+                {
+                    memoryScanner.ConfirmedXAddress = memoryScanner.Results[selectedIndex].Address;
+                    AddLog($"✅ X 座標位址已確認: 0x{memoryScanner.ConfirmedXAddress.ToInt64():X} (值={memoryScanner.Results[selectedIndex].Value})");
+                }
+            };
+
+            btnConfirmY.Click += (s, args) =>
+            {
+                if (dgv.SelectedRows.Count == 0)
+                {
+                    MessageBox.Show("請先在列表中選擇一個位址！", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+                int selectedIndex = dgv.SelectedRows[0].Index;
+                if (selectedIndex < memoryScanner!.Results.Count)
+                {
+                    memoryScanner.ConfirmedYAddress = memoryScanner.Results[selectedIndex].Address;
+                    AddLog($"✅ Y 座標位址已確認: 0x{memoryScanner.ConfirmedYAddress.ToInt64():X} (值={memoryScanner.Results[selectedIndex].Value})");
+                }
+            };
+
+            btnSaveAddr.Click += (s, args) =>
+            {
+                if (memoryScanner!.ConfirmedXAddress == IntPtr.Zero && memoryScanner.ConfirmedYAddress == IntPtr.Zero)
+                {
+                    MessageBox.Show("尚未確認任何座標位址！", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                memoryScanner.SaveAddresses(AddressFilePath);
+                AddLog($"💾 座標位址已儲存");
+            };
+
+            btnLoadAddr.Click += (s, args) =>
+            {
+                if (memoryScanner!.LoadAddresses(AddressFilePath))
+                {
+                    if (memoryScanner.ValidateAddresses())
                     {
-                        this.BeginInvoke(new Action(() =>
-                            AddLog($"📍 偏差修正：擷取參考位置 ({medX},{medY})（讀取{readings.Count}次取中位數）")));
-                    } catch { }
-
-                    return new CorrectionResult(true, $"擷取參考位置: ({medX},{medY})", medX, medY, 0, 0);
+                        AddLog($"📂 已載入位址: X=0x{memoryScanner.ConfirmedXAddress.ToInt64():X}, Y=0x{memoryScanner.ConfirmedYAddress.ToInt64():X}");
+                    }
+                    else
+                    {
+                        AddLog("⚠️ 已載入位址但驗證失敗（值不在合理範圍），位址可能已失效");
+                    }
                 }
                 else
                 {
-                    try { this.BeginInvoke(new Action(() => AddLog("⚠️ 偵測失敗，無法擷取參考位置"))); } catch { }
-                    return new CorrectionResult(false, "偵測失敗，無法擷取參考位置");
-                }
-            }
-
-            return positionCorrector.CorrectDeviation(minimapTracker);
-        }
-
-        /// <summary>★ 將當前設定套用到修正器</summary>
-        private void ApplyCorrectorSettings(PositionCorrector corrector)
-        {
-            corrector.TargetWindow = targetWindowHandle;
-            corrector.ExternalKeySender = SendKeyForCorrection;
-            corrector.Tolerance = positionCorrectionSettings.Tolerance;
-            corrector.SoftToleranceMin = positionCorrectionSettings.SoftToleranceMin;
-            corrector.SoftToleranceMax = positionCorrectionSettings.SoftToleranceMax;
-            corrector.HorizontalTolerance = positionCorrectionSettings.HorizontalTolerance;
-            corrector.VerticalTolerance = positionCorrectionSettings.VerticalTolerance;
-            corrector.MaxCorrectionTimeMs = positionCorrectionSettings.MaxCorrectionTimeMs;
-            corrector.MoveLeftKeys = positionCorrectionSettings.GetEffectiveLeftKeys();
-            corrector.MoveRightKeys = positionCorrectionSettings.GetEffectiveRightKeys();
-            corrector.MoveUpKeys = positionCorrectionSettings.GetEffectiveUpKeys();
-            corrector.MoveDownKeys = positionCorrectionSettings.GetEffectiveDownKeys();
-            corrector.EnableHorizontalCorrection = positionCorrectionSettings.EnableHorizontalCorrection;
-            corrector.EnableVerticalCorrection = positionCorrectionSettings.EnableVerticalCorrection;
-            corrector.InvertY = positionCorrectionSettings.InvertY;
-            corrector.MaxCorrectionsPerLoop = positionCorrectionSettings.MaxCorrectionsPerLoop;
-            corrector.MaxStepsPerCorrection = positionCorrectionSettings.MaxStepsPerCorrection;
-            corrector.KeyIntervalMinMs = positionCorrectionSettings.KeyIntervalMinMs;
-            corrector.KeyIntervalMaxMs = positionCorrectionSettings.KeyIntervalMaxMs;
-        }
-
-        /// <summary>
-        /// ★ 定期位置檢查：比對當前位置與腳本中最近事件的錄製座標
-        /// 偏差超過容差時自動修正（寬鬆修正，正負5~8px即可）
-        /// </summary>
-        private void PeriodicPositionCheck(List<MacroEvent> events, double currentScriptTime)
-        {
-            if (minimapTracker == null || !minimapTracker.IsCalibrated) return;
-            if (positionCorrector != null && positionCorrector.IsLoopCorrectionLimitReached()) return;
-
-            // ★ 找最近的有錄製座標的事件
-            MacroEvent? nearest = null;
-            double minDist = double.MaxValue;
-            foreach (var evt in events)
-            {
-                if (evt.RecordedX < 0 || evt.RecordedY < 0) continue;
-                double dist = Math.Abs(evt.Timestamp - currentScriptTime);
-                if (dist < minDist) { minDist = dist; nearest = evt; }
-            }
-
-            if (nearest == null) return;
-
-            var (cx, cy, ok) = minimapTracker.ReadPosition();
-            if (!ok) return;
-
-            int dx = nearest.RecordedX - cx;
-            int dy = nearest.RecordedY - cy;
-            // ★ 觸發閾值：分別使用水平/垂直容差，比修正停止容差寬鬆（+3 或 *1.5）
-            int hTrigger = Math.Max(positionCorrectionSettings.HorizontalTolerance + 3,
-                                    (int)(positionCorrectionSettings.HorizontalTolerance * 1.5));
-            int vTrigger = Math.Max(positionCorrectionSettings.VerticalTolerance + 3,
-                                    (int)(positionCorrectionSettings.VerticalTolerance * 1.5));
-
-            bool xOff = positionCorrectionSettings.EnableHorizontalCorrection && Math.Abs(dx) > hTrigger;
-            bool yOff = positionCorrectionSettings.EnableVerticalCorrection && Math.Abs(dy) > vTrigger;
-
-            if (!xOff && !yOff) return; // 位置正常
-
-            this.BeginInvoke(new Action(() =>
-            {
-                AddLog($"📍 定期檢查: 目前({cx},{cy}) 腳本({nearest.RecordedX},{nearest.RecordedY}) 偏差({dx:+#;-#;0},{dy:+#;-#;0}) 觸發閾值 H±{hTrigger} V±{vTrigger} → 修正中");
-                lblPlaybackStatus.Text = $"位置偏差修正中...";
-                lblPlaybackStatus.ForeColor = Color.Orange;
-            }));
-
-            if (positionCorrector == null)
-            {
-                positionCorrector = new PositionCorrector();
-                positionCorrector.OnLog += (msg) =>
-                {
-                    try { this.BeginInvoke(new Action(() => AddLog($"[修正] {msg}"))); } catch { }
-                };
-            }
-            ApplyCorrectorSettings(positionCorrector);
-
-            var result = positionCorrector.CorrectPosition(minimapTracker, nearest.RecordedX, nearest.RecordedY);
-            if (result != null)
-            {
-                var r = result;
-                this.BeginInvoke(new Action(() =>
-                    AddLog(r.Success
-                        ? $"✅ 定期修正完成: ({r.FinalX},{r.FinalY}) 容差 H±{positionCorrector.LastHorizontalTolerance} V±{positionCorrector.LastVerticalTolerance} {r.ElapsedMs}ms"
-                        : $"⚠️ 定期修正: {r.Message}")));
-            }
-        }
-
-        /// <summary>
-        /// 執行位置修正（可指定目標座標，-1 代表使用全域設定）
-        /// </summary>
-        private CorrectionResult? ExecutePositionCorrectionTo(int targetX, int targetY)
-        {
-            if (minimapTracker == null || !minimapTracker.IsCalibrated)
-                return null;
-
-            if (positionCorrector == null)
-                positionCorrector = new PositionCorrector();
-
-            positionCorrector.TargetWindow = targetWindowHandle;
-            positionCorrector.ExternalKeySender = SendKeyForCorrection;
-            positionCorrector.Tolerance = positionCorrectionSettings.Tolerance;
-            positionCorrector.SoftToleranceMin = positionCorrectionSettings.SoftToleranceMin;
-            positionCorrector.SoftToleranceMax = positionCorrectionSettings.SoftToleranceMax;
-            positionCorrector.HorizontalTolerance = positionCorrectionSettings.HorizontalTolerance;
-            positionCorrector.VerticalTolerance = positionCorrectionSettings.VerticalTolerance;
-            positionCorrector.MaxCorrectionTimeMs = positionCorrectionSettings.MaxCorrectionTimeMs;
-            positionCorrector.MoveLeftKeys = positionCorrectionSettings.GetEffectiveLeftKeys();
-            positionCorrector.MoveRightKeys = positionCorrectionSettings.GetEffectiveRightKeys();
-            positionCorrector.MoveUpKeys = positionCorrectionSettings.GetEffectiveUpKeys();
-            positionCorrector.MoveDownKeys = positionCorrectionSettings.GetEffectiveDownKeys();
-            positionCorrector.EnableHorizontalCorrection = positionCorrectionSettings.EnableHorizontalCorrection;
-            positionCorrector.EnableVerticalCorrection = positionCorrectionSettings.EnableVerticalCorrection;
-            positionCorrector.InvertY = positionCorrectionSettings.InvertY;
-            positionCorrector.KeyIntervalMinMs = positionCorrectionSettings.KeyIntervalMinMs;
-            positionCorrector.KeyIntervalMaxMs = positionCorrectionSettings.KeyIntervalMaxMs;
-            positionCorrector.MaxStepsPerCorrection = positionCorrectionSettings.MaxStepsPerCorrection;
-
-            return positionCorrector.CorrectPosition(minimapTracker, targetX, targetY);
-        }
-
-        /// <summary>
-        /// 開啟位置修正設定介面
-        /// </summary>
-        private void OpenPositionCorrectionSettings()
-        {
-            Form f = new Form
-            {
-                Text = "🎯 位置修正設定", Width = 620, Height = 740,
-                StartPosition = FormStartPosition.CenterParent, Owner = this,
-                FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false,
-                BackColor = Color.FromArgb(35, 35, 40),
-                KeyPreview = true
-            };
-
-            // ===== 啟用 =====
-            CheckBox chkEnabled = new CheckBox
-            {
-                Text = "啟用位置修正", Left = 15, Top = 10, Width = 200,
-                ForeColor = Color.White, Font = new Font("Microsoft JhengHei UI", 10F, FontStyle.Bold),
-                Checked = positionCorrectionSettings.Enabled
-            };
-
-            // ===== 模式說明 =====
-            Label lblModeDesc = new Label
-            {
-                Text = "📌 即時比對腳本錄製座標，每隔設定秒數檢查並修正偏差（水平/垂直獨立容差）",
-                Left = 15, Top = 42, Width = 575, Height = 30,
-                ForeColor = Color.FromArgb(120, 200, 255), Font = new Font("Microsoft JhengHei UI", 9F)
-            };
-
-            // ===== 按鍵設定 =====
-            GroupBox grpK = new GroupBox
-            {
-                Text = "⌨️ 移動按鍵 (點擊框後按下單鍵或組合鍵)", Left = 15, Top = 72, Width = 575, Height = 88,
-                ForeColor = Color.White, Font = new Font("Microsoft JhengHei UI", 9F)
-            };
-            Keys[] cL = positionCorrectionSettings.GetEffectiveLeftKeys(), cR = positionCorrectionSettings.GetEffectiveRightKeys();
-            Keys[] cU = positionCorrectionSettings.GetEffectiveUpKeys(), cD = positionCorrectionSettings.GetEffectiveDownKeys();
-
-            CheckBox chkH = new CheckBox { Text = "水平", Left = 10, Top = 22, Width = 50, ForeColor = Color.LightGray, Checked = positionCorrectionSettings.EnableHorizontalCorrection };
-            Label lL = new Label { Text = "左:", Left = 65, Top = 25, Width = 22, ForeColor = Color.LightGray };
-            TextBox tL = new TextBox { Left = 87, Top = 22, Width = 100, Text = PositionCorrector.KeysToDisplayString(cL), BackColor = Color.FromArgb(50, 50, 55), ForeColor = Color.White, Tag = cL, Cursor = Cursors.Arrow };
-            Label lR = new Label { Text = "右:", Left = 195, Top = 25, Width = 22, ForeColor = Color.LightGray };
-            TextBox tR = new TextBox { Left = 217, Top = 22, Width = 100, Text = PositionCorrector.KeysToDisplayString(cR), BackColor = Color.FromArgb(50, 50, 55), ForeColor = Color.White, Tag = cR, Cursor = Cursors.Arrow };
-
-            CheckBox chkV = new CheckBox { Text = "垂直", Left = 10, Top = 50, Width = 50, ForeColor = Color.LightGray, Checked = positionCorrectionSettings.EnableVerticalCorrection };
-            Label lU = new Label { Text = "上:", Left = 65, Top = 53, Width = 22, ForeColor = Color.LightGray };
-            TextBox tU = new TextBox { Left = 87, Top = 50, Width = 100, Text = PositionCorrector.KeysToDisplayString(cU), BackColor = Color.FromArgb(50, 50, 55), ForeColor = Color.White, Tag = cU, Cursor = Cursors.Arrow };
-            Label lD = new Label { Text = "下:", Left = 195, Top = 53, Width = 22, ForeColor = Color.LightGray };
-            TextBox tD = new TextBox { Left = 217, Top = 50, Width = 100, Text = PositionCorrector.KeysToDisplayString(cD), BackColor = Color.FromArgb(50, 50, 55), ForeColor = Color.White, Tag = cD, Cursor = Cursors.Arrow };
-
-            CheckBox chkInvY = new CheckBox { Text = "Y軸反轉(Y越大=越高)", Left = 330, Top = 22, Width = 200, ForeColor = Color.FromArgb(255, 200, 100), Checked = positionCorrectionSettings.InvertY };
-
-            // ★ 按鍵輸入（支援單鍵或組合鍵，包含方向鍵、Space、Shift 等）
-            TextBox? actKI = null; HashSet<Keys> capK = new HashSet<Keys>(); System.Windows.Forms.Timer? cTmr = null;
-
-            // ★ 重設定時器：在捕獲到新按鍵後延遲 500ms 結束捕獲
-            Action resetCaptureTimer = () =>
-            {
-                if (cTmr != null) { cTmr.Stop(); cTmr.Dispose(); }
-                var currentTb = actKI;
-                cTmr = new System.Windows.Forms.Timer { Interval = 500 };
-                cTmr.Tick += (ts, te) =>
-                {
-                    cTmr!.Stop(); cTmr.Dispose(); cTmr = null;
-                    if (actKI == currentTb && currentTb != null && capK.Count > 0)
-                    {
-                        currentTb.Tag = capK.ToArray();
-                        currentTb.Text = PositionCorrector.KeysToDisplayString(capK.ToArray());
-                        currentTb.ForeColor = Color.White;
-                        actKI = null;
-                    }
-                };
-                cTmr.Start();
-            };
-
-            Action<TextBox> setupCK = (tb) =>
-            {
-                tb.PreviewKeyDown += (s, e) => { e.IsInputKey = true; };
-                tb.KeyPress += (s, e) => { e.Handled = true; };
-                tb.Click += (s, e) => { actKI = tb; capK.Clear(); tb.Text = "按下..."; tb.ForeColor = Color.Yellow; };
-                tb.Leave += (s, e) => { if (actKI == tb) { actKI = null; if (capK.Count > 0) { tb.Tag = capK.ToArray(); tb.Text = PositionCorrector.KeysToDisplayString(capK.ToArray()); } else tb.Text = tb.Tag is Keys[] ks ? PositionCorrector.KeysToDisplayString(ks) : "未設定"; tb.ForeColor = Color.White; } };
-            };
-            setupCK(tL); setupCK(tR); setupCK(tU); setupCK(tD);
-
-            // ★ 使用 Form 層級攔截所有按鍵
-            f.KeyDown += (s, e) =>
-            {
-                if (actKI != null)
-                {
-                    e.Handled = true;
-                    e.SuppressKeyPress = true;
-                    capK.Add(e.KeyCode);
-                    if (e.Control && e.KeyCode != Keys.ControlKey) capK.Add(Keys.ControlKey);
-                    if (e.Shift && e.KeyCode != Keys.ShiftKey) capK.Add(Keys.ShiftKey);
-                    if (e.Alt && e.KeyCode != Keys.Menu) capK.Add(Keys.Menu);
-                    actKI.Text = PositionCorrector.KeysToDisplayString(capK.ToArray());
-                    resetCaptureTimer();
+                    MessageBox.Show("未找到已儲存的位址檔案！", "提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
             };
 
-            grpK.Controls.AddRange(new Control[] { chkH, lL, tL, lR, tR, chkV, lU, tU, lD, tD, chkInvY });
-
-            // ===== 修正參數 =====
-            int paramY = 170;
-            Label lChkInt = new Label { Text = "檢查間隔:", Left = 15, Top = paramY, Width = 65, ForeColor = Color.LightGray };
-            NumericUpDown nChkInt = new NumericUpDown { Left = 82, Top = paramY - 3, Width = 40, Minimum = 1, Maximum = 60, Value = positionCorrectionSettings.CorrectionCheckIntervalSec };
-            Label lChkInt2 = new Label { Text = "秒", Left = 125, Top = paramY, Width = 20, ForeColor = Color.LightGray };
-
-            Label lHTol = new Label { Text = "水平容差:", Left = 155, Top = paramY, Width = 60, ForeColor = Color.LightGray };
-            NumericUpDown nHTol = new NumericUpDown { Left = 218, Top = paramY - 3, Width = 38, Minimum = 1, Maximum = 50, Value = positionCorrectionSettings.HorizontalTolerance };
-            Label lVTol = new Label { Text = "垂直:", Left = 262, Top = paramY, Width = 35, ForeColor = Color.LightGray };
-            NumericUpDown nVTol = new NumericUpDown { Left = 297, Top = paramY - 3, Width = 38, Minimum = 1, Maximum = 50, Value = positionCorrectionSettings.VerticalTolerance };
-            Label lTolPx = new Label { Text = "px", Left = 338, Top = paramY, Width = 18, ForeColor = Color.LightGray };
-
-            Label lTO = new Label { Text = "超時:", Left = 350, Top = paramY, Width = 35, ForeColor = Color.LightGray };
-            NumericUpDown nTO = new NumericUpDown { Left = 387, Top = paramY - 3, Width = 60, Minimum = 1000, Maximum = 30000, Value = positionCorrectionSettings.MaxCorrectionTimeMs, Increment = 500 };
-            Label lTOms = new Label { Text = "ms", Left = 450, Top = paramY, Width = 20, ForeColor = Color.LightGray };
-
-            int paramY2 = paramY + 32;
-            Label lKeyInt = new Label { Text = "按鍵間隔:", Left = 15, Top = paramY2, Width = 65, ForeColor = Color.FromArgb(255, 200, 100) };
-            NumericUpDown nKeyMin = new NumericUpDown { Left = 82, Top = paramY2 - 3, Width = 55, Minimum = 100, Maximum = 5000, Value = positionCorrectionSettings.KeyIntervalMinMs, Increment = 100 };
-            Label lKeyTil = new Label { Text = "~", Left = 140, Top = paramY2, Width = 12, ForeColor = Color.LightGray };
-            NumericUpDown nKeyMax = new NumericUpDown { Left = 152, Top = paramY2 - 3, Width = 55, Minimum = 100, Maximum = 5000, Value = positionCorrectionSettings.KeyIntervalMaxMs, Increment = 100 };
-            Label lKeyMs = new Label { Text = "ms (避免硬直)", Left = 210, Top = paramY2, Width = 95, ForeColor = Color.FromArgb(255, 200, 100) };
-
-            Label lMaxCorr = new Label { Text = "步數上限:", Left = 320, Top = paramY2, Width = 60, ForeColor = Color.LightGray };
-            NumericUpDown nMaxCorr = new NumericUpDown { Left = 382, Top = paramY2 - 3, Width = 50, Minimum = 0, Maximum = 999, Value = positionCorrectionSettings.MaxStepsPerCorrection };
-            ToolTip tt = new ToolTip();
-            tt.SetToolTip(nMaxCorr, "0=無限制，>0=每次修正最多按鍵N次（達到後停止本次修正）");
-            tt.SetToolTip(nKeyMin, "每次按鍵後等待的最短時間（毫秒）");
-            tt.SetToolTip(nKeyMax, "每次按鍵後等待的最長時間（毫秒）");
-            tt.SetToolTip(nHTol, "水平方向偏差在此範圍內即停止修正");
-            tt.SetToolTip(nVTol, "垂直方向偏差在此範圍內即停止修正");
-
-            // ===== 🔬 方向診斷 =====
-            GroupBox grpDiag = new GroupBox
+            // ===== 即時位置顯示區 =====
+            Label lblSep = new Label
             {
-                Text = "🔬 方向診斷 (先確認每個按鍵實際讓角色往哪移動)",
-                Left = 15, Top = paramY2 + 35, Width = 575, Height = 80,
-                ForeColor = Color.Yellow, Font = new Font("Microsoft JhengHei UI", 9F)
-            };
-            Button bDL = new Button { Text = "測試 ←左", Left = 10, Top = 22, Width = 75, Height = 26, BackColor = Color.FromArgb(60, 60, 70), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
-            Button bDR = new Button { Text = "測試 →右", Left = 90, Top = 22, Width = 75, Height = 26, BackColor = Color.FromArgb(60, 60, 70), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
-            Button bDU = new Button { Text = "測試 ↑上", Left = 170, Top = 22, Width = 75, Height = 26, BackColor = Color.FromArgb(60, 60, 70), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
-            Button bDD = new Button { Text = "測試 ↓下", Left = 250, Top = 22, Width = 75, Height = 26, BackColor = Color.FromArgb(60, 60, 70), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
-            Label lblDiag = new Label { Left = 10, Top = 50, Width = 555, Height = 20, ForeColor = Color.LightGray, Font = new Font("Consolas", 9F), Text = "點按鈕 → 角色移動一步 → 顯示座標變化" };
-            grpDiag.Controls.AddRange(new Control[] { bDL, bDR, bDU, bDD, lblDiag });
-
-            // ===== 修正日誌 =====
-            GroupBox grpLog = new GroupBox
-            {
-                Text = "📋 修正日誌", Left = 15, Top = paramY2 + 120, Width = 575, Height = 190,
-                ForeColor = Color.White, Font = new Font("Microsoft JhengHei UI", 9F)
-            };
-            TextBox txtLog = new TextBox
-            {
-                Left = 5, Top = 20, Width = 563, Height = 125,
-                Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical,
-                BackColor = Color.FromArgb(25, 25, 30), ForeColor = Color.LightGreen,
-                Font = new Font("Consolas", 8.5F)
-            };
-            Button btnTestCorr = new Button { Text = "🧪 測試修正", Left = 5, Top = 152, Width = 100, Height = 28, BackColor = Color.FromArgb(180, 120, 0), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
-            Button btnClearLog = new Button { Text = "清除", Left = 110, Top = 152, Width = 55, Height = 28, BackColor = Color.FromArgb(60, 60, 70), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
-            Label lblTestRes = new Label { Left = 175, Top = 157, Width = 390, Height = 20, ForeColor = Color.LightGray, Font = new Font("Microsoft JhengHei UI", 9F) };
-            grpLog.Controls.AddRange(new Control[] { txtLog, btnTestCorr, btnClearLog, lblTestRes });
-
-            // ===== 底部 =====
-            int bottomY = paramY2 + 318;
-            Button btnSave = new Button { Text = "💾 儲存", Left = 400, Top = bottomY, Width = 90, Height = 32, BackColor = Color.FromArgb(0, 140, 80), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
-            Button btnClose = new Button { Text = "關閉", Left = 500, Top = bottomY, Width = 85, Height = 32, BackColor = Color.FromArgb(80, 80, 85), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
-
-            // ===== Helper: 建立修正器 =====
-            Func<PositionCorrector> makeCorrector = () => new PositionCorrector
-            {
-                TargetWindow = targetWindowHandle,
-                Tolerance = (int)nHTol.Value,
-                SoftToleranceMin = (int)nHTol.Value,
-                SoftToleranceMax = (int)nVTol.Value,
-                HorizontalTolerance = (int)nHTol.Value,
-                VerticalTolerance = (int)nVTol.Value,
-                MaxCorrectionTimeMs = (int)nTO.Value,
-                MaxStepsPerCorrection = (int)nMaxCorr.Value,
-                MoveLeftKeys = tL.Tag as Keys[] ?? new[] { Keys.Left },
-                MoveRightKeys = tR.Tag as Keys[] ?? new[] { Keys.Right },
-                MoveUpKeys = tU.Tag as Keys[] ?? new[] { Keys.Up },
-                MoveDownKeys = tD.Tag as Keys[] ?? new[] { Keys.Down },
-                EnableHorizontalCorrection = chkH.Checked,
-                EnableVerticalCorrection = chkV.Checked,
-                InvertY = chkInvY.Checked,
-                ExternalKeySender = SendKeyForCorrection,
-                KeyIntervalMinMs = (int)nKeyMin.Value,
-                KeyIntervalMaxMs = (int)nKeyMax.Value
+                Left = 15,
+                Top = 510,
+                Width = 700,
+                Height = 2,
+                BackColor = Color.FromArgb(60, 60, 65)
             };
 
-            Action<string> appendLog = (msg) =>
+            Label lblPosTitle = new Label
             {
-                if (f.IsDisposed) return;
-                f.BeginInvoke(new Action(() =>
+                Text = "📍 即時位置",
+                Left = 15,
+                Top = 520,
+                Width = 120,
+                ForeColor = Color.Yellow,
+                Font = new Font("Microsoft JhengHei UI", 10F, FontStyle.Bold)
+            };
+
+            Label lblXAddr = new Label
+            {
+                Left = 15,
+                Top = 548,
+                Width = 350,
+                Height = 20,
+                ForeColor = Color.LightGray,
+                Font = new Font("Consolas", 9F)
+            };
+            Label lblYAddr = new Label
+            {
+                Left = 15,
+                Top = 570,
+                Width = 350,
+                Height = 20,
+                ForeColor = Color.LightGray,
+                Font = new Font("Consolas", 9F)
+            };
+
+            Label lblPosition = new Label
+            {
+                Left = 380,
+                Top = 535,
+                Width = 330,
+                Height = 60,
+                ForeColor = Color.Lime,
+                Font = new Font("Consolas", 18F, FontStyle.Bold),
+                TextAlign = ContentAlignment.MiddleCenter,
+                BorderStyle = BorderStyle.FixedSingle,
+                BackColor = Color.FromArgb(25, 25, 30),
+                Text = "X: ---  Y: ---"
+            };
+
+            // 即時更新 Timer
+            System.Windows.Forms.Timer posTimer = new System.Windows.Forms.Timer { Interval = 100 };
+            posTimer.Tick += (s, args) =>
+            {
+                if (memoryScanner == null) return;
+
+                // 更新位址顯示
+                lblXAddr.Text = memoryScanner.ConfirmedXAddress != IntPtr.Zero
+                    ? $"X 位址: 0x{memoryScanner.ConfirmedXAddress.ToInt64():X}"
+                    : "X 位址: (未設定)";
+                lblYAddr.Text = memoryScanner.ConfirmedYAddress != IntPtr.Zero
+                    ? $"Y 位址: 0x{memoryScanner.ConfirmedYAddress.ToInt64():X}"
+                    : "Y 位址: (未設定)";
+
+                // 讀取座標
+                var (x, y, success) = memoryScanner.ReadPosition();
+                if (success)
                 {
-                    txtLog.AppendText(msg + Environment.NewLine);
-                    txtLog.SelectionStart = txtLog.TextLength;
-                    txtLog.ScrollToCaret();
-                }));
-            };
-
-            // ===== 事件 =====
-            // 方向診斷
-            Action<string, Func<Keys[]>> doDiag = (dir, getKeys) =>
-            {
-                if (minimapTracker == null || !minimapTracker.IsCalibrated) { lblDiag.Text = "❌ 請先校準"; return; }
-                var c = makeCorrector();
-                lblDiag.Text = $"測試 {dir} 中...";
-                lblDiag.ForeColor = Color.Yellow;
-                Task.Run(() =>
+                    lblPosition.Text = $"X: {x}  Y: {y}";
+                    lblPosition.ForeColor = Color.Lime;
+                }
+                else if (memoryScanner.ConfirmedXAddress != IntPtr.Zero || memoryScanner.ConfirmedYAddress != IntPtr.Zero)
                 {
-                    var r = c.DiagnoseDirection(minimapTracker, dir, getKeys());
-                    f.BeginInvoke(new Action(() =>
-                    {
-                        lblDiag.Text = r.ToString();
-                        lblDiag.ForeColor = r.Error != null ? Color.Red : Color.Lime;
-                        appendLog(r.ToString());
-                    }));
-                });
-            };
-            bDL.Click += (s, e) => doDiag("←左", () => tL.Tag as Keys[] ?? new[] { Keys.Left });
-            bDR.Click += (s, e) => doDiag("→右", () => tR.Tag as Keys[] ?? new[] { Keys.Right });
-            bDU.Click += (s, e) => doDiag("↑上", () => tU.Tag as Keys[] ?? new[] { Keys.Up });
-            bDD.Click += (s, e) => doDiag("↓下", () => tD.Tag as Keys[] ?? new[] { Keys.Down });
-
-            btnClearLog.Click += (s, e) => txtLog.Clear();
-
-            // 測試修正
-            btnTestCorr.Click += (s, e) =>
-            {
-                if (minimapTracker == null || !minimapTracker.IsCalibrated) { lblTestRes.Text = "❌ 未校準"; lblTestRes.ForeColor = Color.Red; return; }
-                var c = makeCorrector();
-                c.OnLog += appendLog;
-
-                lblTestRes.Text = "修正中..."; lblTestRes.ForeColor = Color.Yellow;
-                btnTestCorr.Enabled = false;
-
-                Task.Run(() =>
+                    // 部分讀取
+                    string xStr = "---", yStr = "---";
+                    if (memoryScanner.ConfirmedXAddress != IntPtr.Zero && memoryScanner.ReadInt32(memoryScanner.ConfirmedXAddress, out int xVal))
+                        xStr = xVal.ToString();
+                    if (memoryScanner.ConfirmedYAddress != IntPtr.Zero && memoryScanner.ReadInt32(memoryScanner.ConfirmedYAddress, out int yVal))
+                        yStr = yVal.ToString();
+                    lblPosition.Text = $"X: {xStr}  Y: {yStr}";
+                    lblPosition.ForeColor = Color.FromArgb(255, 200, 100);
+                }
+                else
                 {
-                    // ★ 即時模式：讀取當前位置作為參考點，顯示修正器能力
-                    var (cx, cy, ok) = minimapTracker.ReadPosition();
-                    CorrectionResult result;
-                    if (ok)
-                    {
-                        appendLog($"即時模式 — 當前({cx},{cy}) 將作為參考起點");
-                        result = new CorrectionResult(true, $"即時模式 當前({cx},{cy}) 播放時自動比對腳本位置", cx, cy);
-                    }
-                    else result = new CorrectionResult(false, "偵測失敗");
-
-                    f.BeginInvoke(new Action(() =>
-                    {
-                        btnTestCorr.Enabled = true;
-                        lblTestRes.Text = (result.Success ? "✅ " : "⚠️ ") + result.Message;
-                        lblTestRes.ForeColor = result.Success ? Color.Lime : Color.Orange;
-                    }));
-                });
+                    lblPosition.Text = "X: ---  Y: ---";
+                    lblPosition.ForeColor = Color.Gray;
+                }
             };
+            posTimer.Start();
 
-            btnSave.Click += (s, e) =>
+            // ===== 關閉按鈕 =====
+            Button btnClose = new Button
             {
-                positionCorrectionSettings.Enabled = chkEnabled.Checked;
-                positionCorrectionSettings.UseDeviationMode = true; // 統一即時模式
-                positionCorrectionSettings.HorizontalTolerance = (int)nHTol.Value;
-                positionCorrectionSettings.VerticalTolerance = (int)nVTol.Value;
-                positionCorrectionSettings.SoftToleranceMin = (int)nHTol.Value; // 向後兼容
-                positionCorrectionSettings.SoftToleranceMax = (int)nVTol.Value; // 向後兼容
-                positionCorrectionSettings.Tolerance = (int)nHTol.Value; // 向後兼容
-                positionCorrectionSettings.MaxCorrectionTimeMs = (int)nTO.Value;
-                positionCorrectionSettings.InvertY = chkInvY.Checked;
-                positionCorrectionSettings.MoveLeftKeys = PositionCorrector.KeysToIntArray(tL.Tag as Keys[] ?? new[] { Keys.Left });
-                positionCorrectionSettings.MoveRightKeys = PositionCorrector.KeysToIntArray(tR.Tag as Keys[] ?? new[] { Keys.Right });
-                positionCorrectionSettings.MoveUpKeys = PositionCorrector.KeysToIntArray(tU.Tag as Keys[] ?? new[] { Keys.Up });
-                positionCorrectionSettings.MoveDownKeys = PositionCorrector.KeysToIntArray(tD.Tag as Keys[] ?? new[] { Keys.Down });
-                var lk = tL.Tag as Keys[]; var rk = tR.Tag as Keys[]; var uk = tU.Tag as Keys[]; var dk = tD.Tag as Keys[];
-                positionCorrectionSettings.MoveLeftKey = lk?.Length > 0 ? (int)lk[0] : (int)Keys.Left;
-                positionCorrectionSettings.MoveRightKey = rk?.Length > 0 ? (int)rk[0] : (int)Keys.Right;
-                positionCorrectionSettings.MoveUpKey = uk?.Length > 0 ? (int)uk[0] : (int)Keys.Up;
-                positionCorrectionSettings.MoveDownKey = dk?.Length > 0 ? (int)dk[0] : (int)Keys.Down;
-                positionCorrectionSettings.EnableHorizontalCorrection = chkH.Checked;
-                positionCorrectionSettings.EnableVerticalCorrection = chkV.Checked;
-                positionCorrectionSettings.MaxCorrectionsPerLoop = 0; // 循環觸發次數不限制
-                positionCorrectionSettings.MaxStepsPerCorrection = (int)nMaxCorr.Value; // ★ 每次修正的按鍵步數上限
-                positionCorrectionSettings.CorrectionCheckIntervalSec = (int)nChkInt.Value;
-                positionCorrectionSettings.KeyIntervalMinMs = (int)nKeyMin.Value;
-                positionCorrectionSettings.KeyIntervalMaxMs = (int)nKeyMax.Value;
-                // ★ 設定變更旗標：下個循環自動套用
-                _correctionSettingsChanged = true;
-                SaveAppSettings();
-                AddLog("💾 [設定完成，將於下個循環套用]");
-                f.Close();
+                Text = "關閉",
+                Left = 615,
+                Top = 474,
+                Width = 100,
+                Height = 28,
+                BackColor = Color.FromArgb(80, 80, 85),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
+            btnClose.Click += (s, args) => scanForm.Close();
+
+            // ===== 提示區 =====
+            Label lblTip = new Label
+            {
+                Text = "💡 提示：使用 @pos 指令可查看角色座標 | 向右走 X 增加，向上跳 Y 減少 | " +
+                       "位址每次重開遊戲可能會改變，需重新掃描",
+                Left = 15,
+                Top = 600,
+                Width = 700,
+                Height = 35,
+                ForeColor = Color.Gray,
+                Font = new Font("Microsoft JhengHei UI", 8.5F)
             };
 
-            btnClose.Click += (s, e) => f.Close();
+            scanForm.FormClosing += (s, args) => posTimer.Stop();
 
-            f.Controls.AddRange(new Control[] {
-                chkEnabled, lblModeDesc, grpK,
-                lChkInt, nChkInt, lChkInt2,
-                lHTol, nHTol, lVTol, nVTol, lTolPx,
-                lTO, nTO, lTOms,
-                lKeyInt, nKeyMin, lKeyTil, nKeyMax, lKeyMs,
-                lMaxCorr, nMaxCorr,
-                grpDiag, grpLog, btnSave, btnClose
+            scanForm.Controls.AddRange(new Control[]
+            {
+                lblGuide,
+                lblValue, txtScanValue, lblTolerance, numTolerance,
+                btnFirstScan, btnScanRange, btnNewScan,
+                lblFilter, btnFilterChanged, btnFilterUnchanged, btnFilterIncreased, btnFilterDecreased, btnFilterExact, btnRefreshValues,
+                lblResultCount, dgv,
+                lblConfirm, btnConfirmX, btnConfirmY, btnSaveAddr, btnLoadAddr,
+                lblSep, lblPosTitle, lblXAddr, lblYAddr, lblPosition,
+                btnClose, lblTip
             });
-            f.ShowDialog();
+
+            scanForm.ShowDialog();
         }
 
         private void UpdateUI()
@@ -6330,11 +5814,6 @@ namespace MapleStoryMacro
             public Keys KeyCode { get; set; }
             public string EventType { get; set; } = "down";
             public double Timestamp { get; set; }
-            public int CorrectTargetX { get; set; } = -1;
-            public int CorrectTargetY { get; set; } = -1;
-            /// <summary>錄製時的小地圖座標（-1 = 未記錄）</summary>
-            public int RecordedX { get; set; } = -1;
-            public int RecordedY { get; set; } = -1;
         }
 
         /// <summary>
@@ -6449,29 +5928,18 @@ namespace MapleStoryMacro
             }
         }
 
-        /// <summary>
-        /// 儲存應用設定
-        /// </summary>
-        private void SaveAppSettings()
-        {
-            SaveSettingsToFile(SettingsFilePath, "");
-        }
-
         private AppSettings BuildSettings()
         {
             var settings = new AppSettings
             {
                 PlayHotkey = playHotkey,
                 StopHotkey = stopHotkey,
-                PauseHotkey = pauseHotkey,
                 HotkeyEnabled = hotkeyEnabled,
-                RecordHotkey = recordHotkey,
                 WindowTitle = txtWindowTitle.Text,
                 ArrowKeyMode = (int)currentArrowKeyMode,
-                PositionCorrectionEnabled = positionCorrectionSettings.Enabled,
+                PositionCorrectionEnabled = chkPositionCorrection.Checked,
                 LastScriptPath = currentScriptPath,
-                ScheduleTasks = scheduleTasks.Where(t => t.Enabled && t.StartTime > DateTime.Now).ToList(),
-                PositionCorrection = positionCorrectionSettings
+                ScheduleTasks = scheduleTasks.Where(t => t.Enabled && t.StartTime > DateTime.Now).ToList()
             };
 
             return settings;
@@ -6481,35 +5949,24 @@ namespace MapleStoryMacro
         {
             playHotkey = settings.PlayHotkey;
             stopHotkey = settings.StopHotkey;
-            pauseHotkey = settings.PauseHotkey;
             hotkeyEnabled = settings.HotkeyEnabled;
-            recordHotkey = settings.RecordHotkey;
             txtWindowTitle.Text = settings.WindowTitle;
 
             // 自動降級：無效的模式值改為 SendToChild(0)
             if (settings.ArrowKeyMode > 2)
                 settings.ArrowKeyMode = 0;
             currentArrowKeyMode = (ArrowKeyMode)settings.ArrowKeyMode;
-            // ★ 同步主介面方向鍵模式下拉框
-            if (cmbArrowMode != null && (int)currentArrowKeyMode < cmbArrowMode.Items.Count)
-                cmbArrowMode.SelectedIndex = (int)currentArrowKeyMode;
-
-            // 位置修正設定（先載入設定，再同步 checkbox）
-            if (settings.PositionCorrection != null)
-            {
-                positionCorrectionSettings = settings.PositionCorrection;
-            }
 
             // 座標修正開關
             positionCorrectionEnabled = settings.PositionCorrectionEnabled;
-            positionCorrectionSettings.Enabled = positionCorrectionEnabled;
+            chkPositionCorrection.Checked = positionCorrectionEnabled;
 
-            // 已停用：不再自動載入上次的腳本
-            // if (!string.IsNullOrEmpty(settings.LastScriptPath) && File.Exists(settings.LastScriptPath))
-            // {
-            //     currentScriptPath = settings.LastScriptPath;
-            //     LoadScriptFromFile(settings.LastScriptPath);
-            // }
+            // 嘗試自動載入上次的腳本
+            if (!string.IsNullOrEmpty(settings.LastScriptPath) && File.Exists(settings.LastScriptPath))
+            {
+                currentScriptPath = settings.LastScriptPath;
+                LoadScriptFromFile(settings.LastScriptPath);
+            }
 
             // 載入排程任務（只恢復未來的排程）
             if (settings.ScheduleTasks != null && settings.ScheduleTasks.Count > 0)
@@ -6524,7 +5981,7 @@ namespace MapleStoryMacro
             }
 
             AddLog("全域設定已載入");
-            AddLog($"熱鍵：播放={GetKeyDisplayName(playHotkey)}, 停止={GetKeyDisplayName(stopHotkey)}, 暫停={GetKeyDisplayName(pauseHotkey)}, 錄製={GetKeyDisplayName(recordHotkey)}");
+            AddLog($"熱鍵：播放={GetKeyDisplayName(playHotkey)}, 停止={GetKeyDisplayName(stopHotkey)}");
             AddLog($"方向鍵模式：{currentArrowKeyMode}");
 
             UpdateUI();
@@ -6558,16 +6015,6 @@ namespace MapleStoryMacro
         }
 
         private void btnMemoryScanner_Click(object sender, EventArgs e)
-        {
-
-        }
-
-        private void lblLoopCount_Click(object sender, EventArgs e)
-        {
-
-        }
-
-        private void txtPauseHotkey_TextChanged(object sender, EventArgs e)
         {
 
         }
