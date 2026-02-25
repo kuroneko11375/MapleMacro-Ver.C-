@@ -2464,14 +2464,16 @@ namespace MapleStoryMacro
                                     double secSinceLastCheck = Stopwatch.GetElapsedTime(lastCorrectionCheckTick).TotalSeconds;
                                     if (secSinceLastCheck >= positionCorrectionSettings.CorrectionCheckIntervalSec)
                                     {
-                                        // ★ 阻塞式修正：設定 isCorrecting，記錄修正耗時，修正後補償計時
+                                        // ★ 阻塞式修正：設定 isCorrecting，暫停自定義按鍵，記錄修正耗時，修正後補償計時
                                         isCorrecting = true;
+                                        customKeysPaused = true;
                                         long corrStartTick = Stopwatch.GetTimestamp();
 
                                         double scriptTime = Stopwatch.GetElapsedTime(loopStartTick).TotalSeconds;
                                         PeriodicPositionCheck(events, scriptTime);
 
                                         long corrElapsedTicks = Stopwatch.GetTimestamp() - corrStartTick;
+                                        customKeysPaused = false;
                                         isCorrecting = false;
 
                                         // ★ 時間補償：將修正耗時從等待計時和循環計時中扣除
@@ -2539,13 +2541,15 @@ namespace MapleStoryMacro
 
                             if (minimapTracker != null && minimapTracker.IsCalibrated)
                             {
-                                // ★ 阻塞式修正 + 時間補償
+                                // ★ 阻塞式修正 + 時間補償（暫停自定義按鍵）
                                 isCorrecting = true;
+                                customKeysPaused = true;
                                 long corrStartTick = Stopwatch.GetTimestamp();
 
                                 var corrResult = ExecutePositionCorrectionTo(tx, ty);
 
                                 long corrElapsedTicks = Stopwatch.GetTimestamp() - corrStartTick;
+                                customKeysPaused = false;
                                 isCorrecting = false;
 
                                 // ★ 時間補償
@@ -5880,6 +5884,10 @@ namespace MapleStoryMacro
             corrector.MaxStepsPerCorrection = positionCorrectionSettings.MaxStepsPerCorrection;
             corrector.KeyIntervalMinMs = positionCorrectionSettings.KeyIntervalMinMs;
             corrector.KeyIntervalMaxMs = positionCorrectionSettings.KeyIntervalMaxMs;
+            corrector.HorizontalKeyIntervalMinMs = positionCorrectionSettings.HorizontalKeyIntervalMinMs;
+            corrector.HorizontalKeyIntervalMaxMs = positionCorrectionSettings.HorizontalKeyIntervalMaxMs;
+            corrector.VerticalKeyIntervalMinMs = positionCorrectionSettings.VerticalKeyIntervalMinMs;
+            corrector.VerticalKeyIntervalMaxMs = positionCorrectionSettings.VerticalKeyIntervalMaxMs;
         }
 
         /// <summary>
@@ -5975,6 +5983,10 @@ namespace MapleStoryMacro
             positionCorrector.InvertY = positionCorrectionSettings.InvertY;
             positionCorrector.KeyIntervalMinMs = positionCorrectionSettings.KeyIntervalMinMs;
             positionCorrector.KeyIntervalMaxMs = positionCorrectionSettings.KeyIntervalMaxMs;
+            positionCorrector.HorizontalKeyIntervalMinMs = positionCorrectionSettings.HorizontalKeyIntervalMinMs;
+            positionCorrector.HorizontalKeyIntervalMaxMs = positionCorrectionSettings.HorizontalKeyIntervalMaxMs;
+            positionCorrector.VerticalKeyIntervalMinMs = positionCorrectionSettings.VerticalKeyIntervalMinMs;
+            positionCorrector.VerticalKeyIntervalMaxMs = positionCorrectionSettings.VerticalKeyIntervalMaxMs;
             positionCorrector.MaxStepsPerCorrection = positionCorrectionSettings.MaxStepsPerCorrection;
 
             return positionCorrector.CorrectPosition(minimapTracker, targetX, targetY);
@@ -5987,7 +5999,7 @@ namespace MapleStoryMacro
         {
             Form f = new Form
             {
-                Text = "🎯 位置修正設定", Width = 620, Height = 740,
+                Text = "🎯 位置修正設定", Width = 620, Height = 770,
                 StartPosition = FormStartPosition.CenterParent, Owner = this,
                 FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false,
                 BackColor = Color.FromArgb(35, 35, 40),
@@ -6100,18 +6112,27 @@ namespace MapleStoryMacro
             Label lTOms = new Label { Text = "ms", Left = 450, Top = paramY, Width = 20, ForeColor = Color.LightGray };
 
             int paramY2 = paramY + 32;
-            Label lKeyInt = new Label { Text = "按鍵間隔:", Left = 15, Top = paramY2, Width = 65, ForeColor = Color.FromArgb(255, 200, 100) };
-            NumericUpDown nKeyMin = new NumericUpDown { Left = 82, Top = paramY2 - 3, Width = 55, Minimum = 100, Maximum = 5000, Value = positionCorrectionSettings.KeyIntervalMinMs, Increment = 100 };
-            Label lKeyTil = new Label { Text = "~", Left = 140, Top = paramY2, Width = 12, ForeColor = Color.LightGray };
-            NumericUpDown nKeyMax = new NumericUpDown { Left = 152, Top = paramY2 - 3, Width = 55, Minimum = 100, Maximum = 5000, Value = positionCorrectionSettings.KeyIntervalMaxMs, Increment = 100 };
-            Label lKeyMs = new Label { Text = "ms (避免硬直)", Left = 210, Top = paramY2, Width = 95, ForeColor = Color.FromArgb(255, 200, 100) };
+            Label lHKeyInt = new Label { Text = "水平間隔:", Left = 15, Top = paramY2, Width = 65, ForeColor = Color.FromArgb(255, 200, 100) };
+            NumericUpDown nHKeyMin = new NumericUpDown { Left = 82, Top = paramY2 - 3, Width = 55, Minimum = 100, Maximum = 5000, Value = positionCorrectionSettings.HorizontalKeyIntervalMinMs, Increment = 100 };
+            Label lHKeyTil = new Label { Text = "~", Left = 140, Top = paramY2, Width = 12, ForeColor = Color.LightGray };
+            NumericUpDown nHKeyMax = new NumericUpDown { Left = 152, Top = paramY2 - 3, Width = 55, Minimum = 100, Maximum = 5000, Value = positionCorrectionSettings.HorizontalKeyIntervalMaxMs, Increment = 100 };
+            Label lHKeyMs = new Label { Text = "ms", Left = 210, Top = paramY2, Width = 25, ForeColor = Color.FromArgb(255, 200, 100) };
+
+            int paramY3 = paramY2 + 30;
+            Label lVKeyInt = new Label { Text = "垂直間隔:", Left = 15, Top = paramY3, Width = 65, ForeColor = Color.FromArgb(100, 220, 255) };
+            NumericUpDown nVKeyMin = new NumericUpDown { Left = 82, Top = paramY3 - 3, Width = 55, Minimum = 50, Maximum = 5000, Value = positionCorrectionSettings.VerticalKeyIntervalMinMs, Increment = 50 };
+            Label lVKeyTil = new Label { Text = "~", Left = 140, Top = paramY3, Width = 12, ForeColor = Color.LightGray };
+            NumericUpDown nVKeyMax = new NumericUpDown { Left = 152, Top = paramY3 - 3, Width = 55, Minimum = 50, Maximum = 5000, Value = positionCorrectionSettings.VerticalKeyIntervalMaxMs, Increment = 50 };
+            Label lVKeyMs = new Label { Text = "ms (垂直較短)", Left = 210, Top = paramY3, Width = 95, ForeColor = Color.FromArgb(100, 220, 255) };
 
             Label lMaxCorr = new Label { Text = "步數上限:", Left = 320, Top = paramY2, Width = 60, ForeColor = Color.LightGray };
             NumericUpDown nMaxCorr = new NumericUpDown { Left = 382, Top = paramY2 - 3, Width = 50, Minimum = 0, Maximum = 999, Value = positionCorrectionSettings.MaxStepsPerCorrection };
             ToolTip tt = new ToolTip();
             tt.SetToolTip(nMaxCorr, "0=無限制，>0=每次修正最多按鍵N次（達到後停止本次修正）");
-            tt.SetToolTip(nKeyMin, "每次按鍵後等待的最短時間（毫秒）");
-            tt.SetToolTip(nKeyMax, "每次按鍵後等待的最長時間（毫秒）");
+            tt.SetToolTip(nHKeyMin, "水平修正按鍵後等待的最短時間（毫秒）");
+            tt.SetToolTip(nHKeyMax, "水平修正按鍵後等待的最長時間（毫秒）");
+            tt.SetToolTip(nVKeyMin, "垂直修正按鍵後等待的最短時間（毫秒）— 垂直較短");
+            tt.SetToolTip(nVKeyMax, "垂直修正按鍵後等待的最長時間（毫秒）");
             tt.SetToolTip(nHTol, "水平方向偏差在此範圍內即停止修正");
             tt.SetToolTip(nVTol, "垂直方向偏差在此範圍內即停止修正");
 
@@ -6119,7 +6140,7 @@ namespace MapleStoryMacro
             GroupBox grpDiag = new GroupBox
             {
                 Text = "🔬 方向診斷 (先確認每個按鍵實際讓角色往哪移動)",
-                Left = 15, Top = paramY2 + 35, Width = 575, Height = 80,
+                Left = 15, Top = paramY3 + 35, Width = 575, Height = 80,
                 ForeColor = Color.Yellow, Font = new Font("microsoft yahei ui", 9F)
             };
             Button bDL = new Button { Text = "測試 ←左", Left = 10, Top = 22, Width = 75, Height = 26, BackColor = Color.FromArgb(60, 60, 70), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
@@ -6132,7 +6153,7 @@ namespace MapleStoryMacro
             // ===== 修正日誌 =====
             GroupBox grpLog = new GroupBox
             {
-                Text = "📋 修正日誌", Left = 15, Top = paramY2 + 120, Width = 575, Height = 190,
+                Text = "📋 修正日誌", Left = 15, Top = paramY3 + 120, Width = 575, Height = 190,
                 ForeColor = Color.White, Font = new Font("microsoft yahei ui", 9F)
             };
             TextBox txtLog = new TextBox
@@ -6148,7 +6169,7 @@ namespace MapleStoryMacro
             grpLog.Controls.AddRange(new Control[] { txtLog, btnTestCorr, btnClearLog, lblTestRes });
 
             // ===== 底部 =====
-            int bottomY = paramY2 + 318;
+            int bottomY = paramY3 + 318;
             Button btnSave = new Button { Text = "💾 儲存", Left = 400, Top = bottomY, Width = 90, Height = 32, BackColor = Color.FromArgb(0, 140, 80), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
             Button btnClose = new Button { Text = "關閉", Left = 500, Top = bottomY, Width = 85, Height = 32, BackColor = Color.FromArgb(80, 80, 85), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
 
@@ -6171,8 +6192,12 @@ namespace MapleStoryMacro
                 EnableVerticalCorrection = chkV.Checked,
                 InvertY = chkInvY.Checked,
                 ExternalKeySender = SendKeyForCorrection,
-                KeyIntervalMinMs = (int)nKeyMin.Value,
-                KeyIntervalMaxMs = (int)nKeyMax.Value
+                KeyIntervalMinMs = (int)nHKeyMin.Value,
+                KeyIntervalMaxMs = (int)nHKeyMax.Value,
+                HorizontalKeyIntervalMinMs = (int)nHKeyMin.Value,
+                HorizontalKeyIntervalMaxMs = (int)nHKeyMax.Value,
+                VerticalKeyIntervalMinMs = (int)nVKeyMin.Value,
+                VerticalKeyIntervalMaxMs = (int)nVKeyMax.Value
             };
 
             Action<string> appendLog = (msg) =>
@@ -6268,8 +6293,12 @@ namespace MapleStoryMacro
                 positionCorrectionSettings.MaxCorrectionsPerLoop = 0; // 循環觸發次數不限制
                 positionCorrectionSettings.MaxStepsPerCorrection = (int)nMaxCorr.Value; // ★ 每次修正的按鍵步數上限
                 positionCorrectionSettings.CorrectionCheckIntervalSec = (int)nChkInt.Value;
-                positionCorrectionSettings.KeyIntervalMinMs = (int)nKeyMin.Value;
-                positionCorrectionSettings.KeyIntervalMaxMs = (int)nKeyMax.Value;
+                positionCorrectionSettings.KeyIntervalMinMs = (int)nHKeyMin.Value;
+                positionCorrectionSettings.KeyIntervalMaxMs = (int)nHKeyMax.Value;
+                positionCorrectionSettings.HorizontalKeyIntervalMinMs = (int)nHKeyMin.Value;
+                positionCorrectionSettings.HorizontalKeyIntervalMaxMs = (int)nHKeyMax.Value;
+                positionCorrectionSettings.VerticalKeyIntervalMinMs = (int)nVKeyMin.Value;
+                positionCorrectionSettings.VerticalKeyIntervalMaxMs = (int)nVKeyMax.Value;
                 // ★ 設定變更旗標：下個循環自動套用
                 _correctionSettingsChanged = true;
                 SaveAppSettings();
@@ -6284,7 +6313,8 @@ namespace MapleStoryMacro
                 lChkInt, nChkInt, lChkInt2,
                 lHTol, nHTol, lVTol, nVTol, lTolPx,
                 lTO, nTO, lTOms,
-                lKeyInt, nKeyMin, lKeyTil, nKeyMax, lKeyMs,
+                lHKeyInt, nHKeyMin, lHKeyTil, nHKeyMax, lHKeyMs,
+                lVKeyInt, nVKeyMin, lVKeyTil, nVKeyMax, lVKeyMs,
                 lMaxCorr, nMaxCorr,
                 grpDiag, grpLog, btnSave, btnClose
             });

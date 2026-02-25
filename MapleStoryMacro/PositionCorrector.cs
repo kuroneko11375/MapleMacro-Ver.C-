@@ -45,10 +45,18 @@ namespace MapleStoryMacro
         public int MaxStepsPerCorrection { get; set; } = 0;
         /// <summary>每次循環內最多觸發修正次數（0=無限制）</summary>
         public int MaxCorrectionsPerLoop { get; set; } = 0;
-        /// <summary>修正按鍵間隔下限（毫秒）— 避免角色硬直</summary>
+        /// <summary>修正按鍵間隔下限（毫秒）— 向後兼容</summary>
         public int KeyIntervalMinMs { get; set; } = 700;
-        /// <summary>修正按鍵間隔上限（毫秒）</summary>
+        /// <summary>修正按鍵間隔上限（毫秒）— 向後兼容</summary>
         public int KeyIntervalMaxMs { get; set; } = 1200;
+        /// <summary>水平修正按鍵間隔下限（毫秒）</summary>
+        public int HorizontalKeyIntervalMinMs { get; set; } = 700;
+        /// <summary>水平修正按鍵間隔上限（毫秒）</summary>
+        public int HorizontalKeyIntervalMaxMs { get; set; } = 1200;
+        /// <summary>垂直修正按鍵間隔下限（毫秒）— 垂直通常需要較短間隔</summary>
+        public int VerticalKeyIntervalMinMs { get; set; } = 300;
+        /// <summary>垂直修正按鍵間隔上限（毫秒）</summary>
+        public int VerticalKeyIntervalMaxMs { get; set; } = 600;
         /// <summary>柔性容差下限（修正到此範圍內即停止）</summary>
         public int SoftToleranceMin { get; set; } = 5;
         /// <summary>柔性容差上限</summary>
@@ -180,7 +188,7 @@ namespace MapleStoryMacro
             }
 
             string stepsInfo = MaxStepsPerCorrection > 0 ? $"步數上限{MaxStepsPerCorrection}" : "無步數限制";
-            Log($"=== 修正開始 目標({targetX},{targetY}) 初始({initX},{initY}) 容差H±{hTol}/V±{vTol} {stepsInfo} 時限{MaxCorrectionTimeMs}ms 間隔{KeyIntervalMinMs}~{KeyIntervalMaxMs}ms ===");
+            Log($"=== 修正開始 目標({targetX},{targetY}) 初始({initX},{initY}) 容差H±{hTol}/V±{vTol} {stepsInfo} 時限{MaxCorrectionTimeMs}ms H間隔{HorizontalKeyIntervalMinMs}~{HorizontalKeyIntervalMaxMs}ms V間隔{VerticalKeyIntervalMinMs}~{VerticalKeyIntervalMaxMs}ms ===");
 
             try
             {
@@ -233,7 +241,7 @@ namespace MapleStoryMacro
                         Log($"[{iter}] 垂直修正 {dir} [{string.Join("+", unique.Select(k => k.ToString()))}]");
                         SendCombinedKeyPress(unique);
                         keyPressCount++;
-                        SleepKeyInterval();
+                        SleepKeyInterval(true);
 
                         // 按鍵後立即檢查
                         var (vx, vy, vOk) = tracker.ReadPosition();
@@ -263,7 +271,7 @@ namespace MapleStoryMacro
                         Log($"[{iter}] 水平修正 {dir} [{string.Join("+", keys.Select(k => k.ToString()))}]");
                         SendCombinedKeyPress(keys);
                         keyPressCount++;
-                        SleepKeyInterval();
+                        SleepKeyInterval(false);
 
                         var (nx, ny, nOk) = tracker.ReadPosition();
                         if (nOk)
@@ -309,7 +317,7 @@ namespace MapleStoryMacro
                         Log($"[{iter}] X偏差大 先水平修正 {(dx > 0 ? "→" : "←")}");
                         SendCombinedKeyPress(keys);
                         keyPressCount++;
-                        SleepKeyInterval();
+                        SleepKeyInterval(false);
 
                         var (hx, hy, hOk) = tracker.ReadPosition();
                         if (hOk)
@@ -329,7 +337,7 @@ namespace MapleStoryMacro
                         continue;
                     }
 
-                    SleepKeyInterval();
+                    SleepKeyInterval(false);
                 }
 
                 // ★ 判斷結束原因
@@ -354,12 +362,21 @@ namespace MapleStoryMacro
         }
 
         /// <summary>
-        /// ★ 隨機按鍵間隔（700~1200ms），避免角色硬直來不及吃指令
+        /// ★ 隨機按鍵間隔，水平與垂直分開（垂直較短以加速跳躍修正）
         /// </summary>
-        private void SleepKeyInterval()
+        private void SleepKeyInterval(bool isVertical = false)
         {
-            int min = Math.Max(KeyIntervalMinMs, 100);
-            int max = Math.Max(KeyIntervalMaxMs, min + 1);
+            int min, max;
+            if (isVertical)
+            {
+                min = Math.Max(VerticalKeyIntervalMinMs, 50);
+                max = Math.Max(VerticalKeyIntervalMaxMs, min + 1);
+            }
+            else
+            {
+                min = Math.Max(HorizontalKeyIntervalMinMs, 100);
+                max = Math.Max(HorizontalKeyIntervalMaxMs, min + 1);
+            }
             Thread.Sleep(_rng.Next(min, max));
         }
 
@@ -522,10 +539,18 @@ namespace MapleStoryMacro
         public bool RecordPathOnCapture { get; set; } = true;
         /// <summary>定期檢查間隔（秒），0=不檢查</summary>
         public int CorrectionCheckIntervalSec { get; set; } = 14;
-        /// <summary>修正按鍵間隔下限（毫秒）— 避免角色硬直吃不到指令</summary>
+        /// <summary>修正按鍵間隔下限（毫秒）— 向後兼容</summary>
         public int KeyIntervalMinMs { get; set; } = 700;
-        /// <summary>修正按鍵間隔上限（毫秒）</summary>
+        /// <summary>修正按鍵間隔上限（毫秒）— 向後兼容</summary>
         public int KeyIntervalMaxMs { get; set; } = 1200;
+        /// <summary>水平修正按鍵間隔下限（毫秒）</summary>
+        public int HorizontalKeyIntervalMinMs { get; set; } = 700;
+        /// <summary>水平修正按鍵間隔上限（毫秒）</summary>
+        public int HorizontalKeyIntervalMaxMs { get; set; } = 1200;
+        /// <summary>垂直修正按鍵間隔下限（毫秒）— 垂直通常需要較短間隔</summary>
+        public int VerticalKeyIntervalMinMs { get; set; } = 300;
+        /// <summary>垂直修正按鍵間隔上限（毫秒）</summary>
+        public int VerticalKeyIntervalMaxMs { get; set; } = 600;
 
         public Keys[] GetEffectiveLeftKeys() => MoveLeftKeys != null && MoveLeftKeys.Length > 0 && MoveLeftKeys[0] != 0 ? PositionCorrector.IntArrayToKeys(MoveLeftKeys) : PositionCorrector.SingleKeyToArray(MoveLeftKey);
         public Keys[] GetEffectiveRightKeys() => MoveRightKeys != null && MoveRightKeys.Length > 0 && MoveRightKeys[0] != 0 ? PositionCorrector.IntArrayToKeys(MoveRightKeys) : PositionCorrector.SingleKeyToArray(MoveRightKey);
