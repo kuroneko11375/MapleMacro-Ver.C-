@@ -358,7 +358,12 @@ namespace MapleStoryMacro
                 AddHistory(initialDx, initialDy, keyPressCount, false);
                 return new CorrectionResult(false, tmsg, fX, fY, keyPressCount, sw.ElapsedMilliseconds);
             }
-            finally { IsCorreecting = false; }
+            finally
+            {
+                // ★ 安全釋放所有修正按鍵，防止卡 keydown 導致角色一直移動
+                ReleaseAllCorrectionKeys();
+                IsCorreecting = false;
+            }
         }
 
         /// <summary>
@@ -406,8 +411,16 @@ namespace MapleStoryMacro
             var (bx, by, ok1) = tracker.ReadPosition();
             if (!ok1) return new DiagnosticResult { Error = "偵測失敗" };
 
-            SendCombinedKeyPress(keys);
-            Thread.Sleep(350);
+            try
+            {
+                SendCombinedKeyPress(keys);
+                Thread.Sleep(350);
+            }
+            finally
+            {
+                // ★ 安全釋放，防止診斷時按鍵卡住
+                ReleaseAllCorrectionKeys();
+            }
 
             var (ax, ay, ok2) = tracker.ReadPosition();
             if (!ok2) return new DiagnosticResult { Error = "按後偵測失敗" };
@@ -433,22 +446,63 @@ namespace MapleStoryMacro
         public void Cancel() => _cancelRequested = true;
 
         #region 按鍵
+        /// <summary>
+        /// 安全釋放所有修正用按鍵（防止按鍵卡住導致角色一直移動）
+        /// </summary>
+        private void ReleaseAllCorrectionKeys()
+        {
+            var allKeys = new HashSet<Keys>();
+            if (MoveLeftKeys != null) foreach (var k in MoveLeftKeys) allKeys.Add(k);
+            if (MoveRightKeys != null) foreach (var k in MoveRightKeys) allKeys.Add(k);
+            if (MoveUpKeys != null) foreach (var k in MoveUpKeys) allKeys.Add(k);
+            if (MoveDownKeys != null) foreach (var k in MoveDownKeys) allKeys.Add(k);
+
+            if (ExternalKeySender != null)
+            {
+                foreach (var k in allKeys)
+                {
+                    try { ExternalKeySender(TargetWindow, k, false); } catch { }
+                }
+            }
+            else if (TargetWindow != IntPtr.Zero)
+            {
+                IntPtr child = FindWindowEx(TargetWindow, IntPtr.Zero, null, null);
+                IntPtr wnd = child != IntPtr.Zero ? child : TargetWindow;
+                foreach (var k in allKeys)
+                    PostMessage(wnd, WM_KEYUP, (IntPtr)k, GetLParam(k, true));
+            }
+        }
+
         private void SendCombinedKeyPress(Keys[] keys)
         {
             if (keys == null || keys.Length == 0) return;
             if (ExternalKeySender != null)
             {
-                foreach (var k in keys) ExternalKeySender(TargetWindow, k, true);
-                Thread.Sleep(KeyPressDurationMs);
-                for (int i = keys.Length - 1; i >= 0; i--) ExternalKeySender(TargetWindow, keys[i], false);
+                try
+                {
+                    foreach (var k in keys) ExternalKeySender(TargetWindow, k, true);
+                    Thread.Sleep(KeyPressDurationMs);
+                }
+                finally
+                {
+                    for (int i = keys.Length - 1; i >= 0; i--)
+                        ExternalKeySender(TargetWindow, keys[i], false);
+                }
             }
             else
             {
                 IntPtr child = FindWindowEx(TargetWindow, IntPtr.Zero, null, null);
                 IntPtr wnd = child != IntPtr.Zero ? child : TargetWindow;
-                foreach (var k in keys) PostMessage(wnd, WM_KEYDOWN, (IntPtr)k, GetLParam(k, false));
-                Thread.Sleep(KeyPressDurationMs);
-                for (int i = keys.Length - 1; i >= 0; i--) PostMessage(wnd, WM_KEYUP, (IntPtr)keys[i], GetLParam(keys[i], true));
+                try
+                {
+                    foreach (var k in keys) PostMessage(wnd, WM_KEYDOWN, (IntPtr)k, GetLParam(k, false));
+                    Thread.Sleep(KeyPressDurationMs);
+                }
+                finally
+                {
+                    for (int i = keys.Length - 1; i >= 0; i--)
+                        PostMessage(wnd, WM_KEYUP, (IntPtr)keys[i], GetLParam(keys[i], true));
+                }
             }
         }
 
