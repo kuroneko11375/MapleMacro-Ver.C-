@@ -219,7 +219,8 @@ namespace MapleStoryMacro
                         string dir = needGoUp ? "↑" : "↓";
 
                         Keys? rawDirKey = null;
-                        if (EnableHorizontalCorrection && Math.Abs(dx) > 1)
+                        // ★ 往下修正時不夾帶左右方向鍵，只有往上時才搭配水平移動
+                        if (EnableHorizontalCorrection && Math.Abs(dx) > 1 && needGoUp)
                         {
                             rawDirKey = dx > 0 ? Keys.Right : Keys.Left;
                             dir += dx > 0 ? "→" : "←";
@@ -507,7 +508,7 @@ namespace MapleStoryMacro
         public int MoveDownKey { get; set; } = (int)Keys.Down;
         public bool EnableHorizontalCorrection { get; set; } = true;
         public bool EnableVerticalCorrection { get; set; } = false;
-        // ★ 保留欄位向後兼容（舊版 JSON 載入不會報錯），但不再用於邏輯
+        // ★ 保留欄位向後兼容
         public bool CorrectEveryLoop { get; set; } = true;
         public int CorrectionFrequency { get; set; } = 1;
         /// <summary>每次循環內最多觸發修正次數（0=無限制）</summary>

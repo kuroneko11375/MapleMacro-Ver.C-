@@ -34,6 +34,9 @@ namespace MapleStoryMacro
         private static extern bool BitBlt(IntPtr hdcDest, int xDest, int yDest, int wDest, int hDest,
             IntPtr hdcSrc, int xSrc, int ySrc, int rop);
 
+        [DllImport("user32.dll")]
+        private static extern bool PrintWindow(IntPtr hWnd, IntPtr hdcBlt, uint nFlags);
+
         private const int SRCCOPY = 0x00CC0020;
 
         [StructLayout(LayoutKind.Sequential)]
@@ -114,29 +117,39 @@ namespace MapleStoryMacro
         }
 
         /// <summary>
-        /// 截取遊戲視窗的指定區域
+        /// 使用 PrintWindow 截取客戶區（背景擷取，視窗被遮擋或失焦仍可用）
         /// </summary>
-        public Bitmap? CaptureRegion(Rectangle region)
+        private Bitmap? CaptureClientAreaBackground()
         {
             if (TargetWindow == IntPtr.Zero) return null;
 
             try
             {
-                // 取得視窗客戶區位置
-                POINT clientOrigin = new POINT { X = 0, Y = 0 };
-                ClientToScreen(TargetWindow, ref clientOrigin);
-
-                int x = clientOrigin.X + region.X;
-                int y = clientOrigin.Y + region.Y;
-                int width = region.Width;
-                int height = region.Height;
-
+                GetClientRect(TargetWindow, out RECT clientRect);
+                int width = clientRect.Right - clientRect.Left;
+                int height = clientRect.Bottom - clientRect.Top;
                 if (width <= 0 || height <= 0) return null;
 
                 Bitmap bmp = new Bitmap(width, height, PixelFormat.Format24bppRgb);
                 using (Graphics g = Graphics.FromImage(bmp))
                 {
-                    g.CopyFromScreen(x, y, 0, 0, new Size(width, height), CopyPixelOperation.SourceCopy);
+                    IntPtr hdc = g.GetHdc();
+                    // PW_CLIENTONLY (0x1) = 只截取客戶區
+                    // PW_RENDERFULLCONTENT (0x2) = 含 DirectComposition 內容
+                    bool ok = PrintWindow(TargetWindow, hdc, 0x1 | 0x2);
+                    g.ReleaseHdc(hdc);
+                    if (!ok)
+                    {
+                        // 備援：不帶 PW_RENDERFULLCONTENT
+                        hdc = g.GetHdc();
+                        ok = PrintWindow(TargetWindow, hdc, 0x1);
+                        g.ReleaseHdc(hdc);
+                    }
+                    if (!ok)
+                    {
+                        bmp.Dispose();
+                        return null;
+                    }
                 }
                 return bmp;
             }
@@ -147,7 +160,47 @@ namespace MapleStoryMacro
         }
 
         /// <summary>
-        /// 截取小地圖區域
+        /// 截取遊戲視窗的指定區域（背景模式：使用 PrintWindow）
+        /// </summary>
+        public Bitmap? CaptureRegion(Rectangle region)
+        {
+            if (TargetWindow == IntPtr.Zero) return null;
+
+            try
+            {
+                int width = region.Width;
+                int height = region.Height;
+                if (width <= 0 || height <= 0) return null;
+
+                // 先截取完整客戶區，再裁切指定區域
+                using (var fullBmp = CaptureClientAreaBackground())
+                {
+                    if (fullBmp == null) return null;
+
+                    // 確保區域不超出截圖範圍
+                    int srcX = Math.Max(0, Math.Min(region.X, fullBmp.Width - 1));
+                    int srcY = Math.Max(0, Math.Min(region.Y, fullBmp.Height - 1));
+                    int srcW = Math.Min(width, fullBmp.Width - srcX);
+                    int srcH = Math.Min(height, fullBmp.Height - srcY);
+                    if (srcW <= 0 || srcH <= 0) return null;
+
+                    Bitmap cropped = new Bitmap(srcW, srcH, PixelFormat.Format24bppRgb);
+                    using (Graphics g = Graphics.FromImage(cropped))
+                    {
+                        g.DrawImage(fullBmp, new Rectangle(0, 0, srcW, srcH),
+                            new Rectangle(srcX, srcY, srcW, srcH), GraphicsUnit.Pixel);
+                    }
+                    return cropped;
+                }
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// 截取小地圖區域（背景模式）
         /// </summary>
         public Bitmap? CaptureMinimap()
         {
@@ -157,34 +210,11 @@ namespace MapleStoryMacro
         }
 
         /// <summary>
-        /// 截取整個遊戲視窗
+        /// 截取整個遊戲視窗（背景模式：使用 PrintWindow）
         /// </summary>
         public Bitmap? CaptureFullWindow()
         {
-            if (TargetWindow == IntPtr.Zero) return null;
-
-            try
-            {
-                GetClientRect(TargetWindow, out RECT clientRect);
-                int width = clientRect.Right - clientRect.Left;
-                int height = clientRect.Bottom - clientRect.Top;
-
-                if (width <= 0 || height <= 0) return null;
-
-                POINT clientOrigin = new POINT { X = 0, Y = 0 };
-                ClientToScreen(TargetWindow, ref clientOrigin);
-
-                Bitmap bmp = new Bitmap(width, height, PixelFormat.Format24bppRgb);
-                using (Graphics g = Graphics.FromImage(bmp))
-                {
-                    g.CopyFromScreen(clientOrigin.X, clientOrigin.Y, 0, 0, new Size(width, height), CopyPixelOperation.SourceCopy);
-                }
-                return bmp;
-            }
-            catch
-            {
-                return null;
-            }
+            return CaptureClientAreaBackground();
         }
 
         /// <summary>

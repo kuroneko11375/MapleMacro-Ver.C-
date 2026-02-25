@@ -202,6 +202,11 @@ namespace MapleStoryMacro
         private const uint KEYEVENTF_KEYUP = 0x0002;
         private const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
 
+        // Mouse message constants
+        private const uint WM_LBUTTONDOWN = 0x0201;
+        private const uint WM_LBUTTONUP = 0x0202;
+        private const uint MK_LBUTTON = 0x0001;
+
         // 按鍵顯示名稱映射表
         private static readonly Dictionary<Keys, string> KeyDisplayNames = new Dictionary<Keys, string>
         {
@@ -429,13 +434,15 @@ namespace MapleStoryMacro
                 if (task.HasStarted && task.EndTime.HasValue && DateTime.Now >= task.EndTime.Value)
                 {
                     task.Enabled = false;
+
+                    // ★ 優先中斷目前的腳本任務
                     if (isPlaying)
                     {
-                        AddLog($"排程結束：已到達結束時間 {task.EndTime.Value:HH:mm:ss}");
+                        AddLog($"排程結束：已到達結束時間 {task.EndTime.Value:HH:mm:ss}，強制停止腳本");
                         BtnStopPlayback_Click(this, EventArgs.Empty);
                     }
 
-                    // 執行回程序列（在背景線程上執行，避免阻塞 UI）
+                    // 執行回程序列（在背景線程上執行，含 2000ms 冷卻延遲）
                     if (task.ReturnToTownEnabled)
                     {
                         var returnTask = task;
@@ -698,7 +705,7 @@ namespace MapleStoryMacro
                 Dock = DockStyle.Top,
                 Height = 25,
                 ForeColor = Color.Blue,
-                Font = new Font("Microsoft JhengHei UI", 9F, FontStyle.Bold),
+                Font = new Font("microsoft yahei ui", 9F, FontStyle.Bold),
                 TextAlign = ContentAlignment.MiddleCenter,
                 BackColor = Color.LightYellow
             };
@@ -3431,83 +3438,61 @@ namespace MapleStoryMacro
         }
 
         /// <summary>
-        /// 執行回程序列：Enter → 貼上指令 → Enter → 等待 → 坐下按鍵
-        /// 使用剪貼簿貼上（Ctrl+V）繞過注音輸入法
-        /// 含重試機制：若第一次可能失敗，會自動重送一次確保指令生效
+        /// 發送滑鼠點擊到背景視窗（Client Area 座標）
+        /// 使用 PostMessage 發送 WM_LBUTTONDOWN + WM_LBUTTONUP
+        /// </summary>
+        private void SendMouseClickToWindow(IntPtr hWnd, int clientX, int clientY)
+        {
+            IntPtr lParam = (IntPtr)((clientY << 16) | (clientX & 0xFFFF));
+            PostMessage(hWnd, WM_LBUTTONDOWN, (IntPtr)MK_LBUTTON, lParam);
+            Thread.Sleep(50);
+            PostMessage(hWnd, WM_LBUTTONUP, IntPtr.Zero, lParam);
+        }
+
+        /// <summary>
+        /// 執行回程序列：停止腳本 → 冷卻 2000ms → 滑鼠點擊座標 → Enter 確認
         /// </summary>
         private void ExecuteReturnToTown(ScheduleTask task)
         {
             try
             {
-                this.BeginInvoke(new Action(() => AddLog($"🏠 開始回程序列：{task.ReturnCommand}")));
+                this.BeginInvoke(new Action(() => AddLog($"🏠 開始回程序列：冷卻 2000ms → 點擊({task.ReturnClickX},{task.ReturnClickY}) → Enter")));
+
+                // 1. 冷卻延遲 2000ms（確保腳本完全停止）
+                Thread.Sleep(2000);
 
                 bool isBackground = targetWindowHandle != IntPtr.Zero && IsWindow(targetWindowHandle);
-                int maxRetries = 2; // 總共嘗試次數（第一次 + 1 次重試）
 
-                for (int attempt = 1; attempt <= maxRetries; attempt++)
+                // 2. 滑鼠模擬點擊目標座標
+                if (isBackground)
                 {
-                    if (attempt > 1)
-                    {
-                        this.BeginInvoke(new Action(() => AddLog($"🔄 第 {attempt} 次嘗試回程...")));
-                        // 重試前先按 Esc 關閉可能殘留的對話框
-                        if (isBackground)
-                        {
-                            SendKeyToWindow(targetWindowHandle, Keys.Escape, true);
-                            Thread.Sleep(50);
-                            SendKeyToWindow(targetWindowHandle, Keys.Escape, false);
-                        }
-                        else
-                        {
-                            SendKeyForeground(Keys.Escape, true);
-                            Thread.Sleep(50);
-                            SendKeyForeground(Keys.Escape, false);
-                        }
-                        Thread.Sleep(500);
-                    }
-
-                    // 1. 按下 Enter（開啟對話框）
-                    if (isBackground)
-                    {
-                        SendKeyToWindow(targetWindowHandle, Keys.Enter, true);
-                        Thread.Sleep(50);
-                        SendKeyToWindow(targetWindowHandle, Keys.Enter, false);
-                    }
-                    else
-                    {
-                        SendKeyForeground(Keys.Enter, true);
-                        Thread.Sleep(50);
-                        SendKeyForeground(Keys.Enter, false);
-                    }
-                    Thread.Sleep(600); // 等對話框完全開啟
-
-                    // 2. 用剪貼簿貼上回程指令（繞過注音輸入法）
-                    PasteTextToGame(targetWindowHandle, task.ReturnCommand, isBackground);
-                    Thread.Sleep(400); // 等文字全部顯示
-
-                    // 3. 按下 Enter（送出指令）
-                    if (isBackground)
-                    {
-                        SendKeyToWindow(targetWindowHandle, Keys.Enter, true);
-                        Thread.Sleep(50);
-                        SendKeyToWindow(targetWindowHandle, Keys.Enter, false);
-                    }
-                    else
-                    {
-                        SendKeyForeground(Keys.Enter, true);
-                        Thread.Sleep(50);
-                        SendKeyForeground(Keys.Enter, false);
-                    }
-
-                    if (attempt < maxRetries)
-                    {
-                        // 等一小段時間讓遊戲處理，若指令已生效（已傳送），重試也不會有副作用
-                        Thread.Sleep(1500);
-                    }
+                    SendMouseClickToWindow(targetWindowHandle, task.ReturnClickX, task.ReturnClickY);
+                    this.BeginInvoke(new Action(() => AddLog($"🖱️ 已點擊座標 ({task.ReturnClickX}, {task.ReturnClickY})")));
+                }
+                else
+                {
+                    this.BeginInvoke(new Action(() => AddLog("⚠️ 前景模式不支援背景滑鼠點擊，跳過")));
                 }
 
-                this.BeginInvoke(new Action(() => AddLog($"📨 已送出指令：{task.ReturnCommand}（含 {maxRetries} 次確認）")));
+                Thread.Sleep(300); // 等待遊戲響應點擊
 
-                // 4. 等待傳送完成
+                // 3. 按下 Enter（確認）
+                if (isBackground)
+                {
+                    SendKeyToWindow(targetWindowHandle, Keys.Enter, true);
+                    Thread.Sleep(50);
+                    SendKeyToWindow(targetWindowHandle, Keys.Enter, false);
+                }
+                else
+                {
+                    SendKeyForeground(Keys.Enter, true);
+                    Thread.Sleep(50);
+                    SendKeyForeground(Keys.Enter, false);
+                }
+
+                this.BeginInvoke(new Action(() => AddLog($"📨 已送出 Enter 確認")));
+
+                // 4. 等待後坐下（如設定）
                 Keys sitKey = (Keys)task.SitDownKeyCode;
                 if (sitKey != Keys.None)
                 {
@@ -3515,22 +3500,6 @@ namespace MapleStoryMacro
                     this.BeginInvoke(new Action(() => AddLog($"⏳ 等待 {task.SitDownDelaySeconds} 秒後坐下...")));
                     Thread.Sleep(delayMs);
 
-                    // 5. 先按 Esc 關閉可能殘留的對話框
-                    if (isBackground)
-                    {
-                        SendKeyToWindow(targetWindowHandle, Keys.Escape, true);
-                        Thread.Sleep(50);
-                        SendKeyToWindow(targetWindowHandle, Keys.Escape, false);
-                    }
-                    else
-                    {
-                        SendKeyForeground(Keys.Escape, true);
-                        Thread.Sleep(50);
-                        SendKeyForeground(Keys.Escape, false);
-                    }
-                    Thread.Sleep(200);
-
-                    // 6. 按下坐下按鍵
                     SendCustomKey(sitKey);
                     this.BeginInvoke(new Action(() => AddLog($"🪑 已坐下：{GetKeyDisplayName(sitKey)}")));
                 }
@@ -4038,7 +4007,7 @@ namespace MapleStoryMacro
                 Top = 10,
                 Width = 720,
                 ForeColor = Color.LightGray,
-                Font = new Font("Microsoft JhengHei UI", 9F)
+                Font = new Font("microsoft yahei ui", 9F)
             };
 
             // 建立 DataGridView
@@ -4056,7 +4025,7 @@ namespace MapleStoryMacro
                 {
                     BackColor = Color.FromArgb(50, 50, 55),
                     ForeColor = Color.White,
-                    Font = new Font("Microsoft JhengHei UI", 9F, FontStyle.Bold),
+                    Font = new Font("microsoft yahei ui", 9F, FontStyle.Bold),
                     Alignment = DataGridViewContentAlignment.MiddleCenter
                 },
                 DefaultCellStyle = new DataGridViewCellStyle
@@ -4065,7 +4034,7 @@ namespace MapleStoryMacro
                     ForeColor = Color.White,
                     SelectionBackColor = Color.FromArgb(0, 100, 180),
                     SelectionForeColor = Color.White,
-                    Font = new Font("Microsoft JhengHei UI", 9F)
+                    Font = new Font("microsoft yahei ui", 9F)
                 },
                 AllowUserToAddRows = false,
                 AllowUserToDeleteRows = false,
@@ -4221,7 +4190,7 @@ namespace MapleStoryMacro
                 Width = 710,
                 Height = 35,
                 ForeColor = Color.LightGray,
-                Font = new Font("Microsoft JhengHei UI", 8.5F)
+                Font = new Font("microsoft yahei ui", 8.5F)
             };
 
             // 按鈕面板
@@ -4379,7 +4348,7 @@ namespace MapleStoryMacro
                 Top = 15,
                 Width = 600,
                 ForeColor = Color.LightGray,
-                Font = new Font("Microsoft JhengHei UI", 10F)
+                Font = new Font("microsoft yahei ui", 10F)
             };
 
             // ===== 新增排程區塊 =====
@@ -4390,7 +4359,7 @@ namespace MapleStoryMacro
                 Top = 45,
                 Width = 200,
                 ForeColor = Color.Cyan,
-                Font = new Font("Microsoft JhengHei UI", 10F, FontStyle.Bold)
+                Font = new Font("microsoft yahei ui", 10F, FontStyle.Bold)
             };
 
             // 腳本選擇
@@ -4464,7 +4433,7 @@ namespace MapleStoryMacro
                 Width = 200,
                 Format = DateTimePickerFormat.Custom,
                 CustomFormat = "yyyy-MM-dd HH:mm:ss",
-                Value = DateTime.Now.AddMinutes(5)
+                Value = DateTime.Now.AddMinutes(1)
             };
 
             // 結束時間
@@ -4475,7 +4444,7 @@ namespace MapleStoryMacro
                 Left = 340,
                 Top = 105,
                 Width = 20,
-                Checked = false,
+                Checked = true,
                 ForeColor = Color.White
             };
             DateTimePicker dtpEnd = new DateTimePicker
@@ -4486,7 +4455,7 @@ namespace MapleStoryMacro
                 Format = DateTimePickerFormat.Custom,
                 CustomFormat = "yyyy-MM-dd HH:mm:ss",
                 Value = DateTime.Now.AddHours(1),
-                Enabled = false
+                Enabled = true
             };
             chkEndTime.CheckedChanged += (s, args) => dtpEnd.Enabled = chkEndTime.Checked;
 
@@ -4511,44 +4480,60 @@ namespace MapleStoryMacro
                 Top = 140,
                 Width = 300,
                 ForeColor = Color.Gray,
-                Font = new Font("Microsoft JhengHei UI", 8.5F)
+                Font = new Font("microsoft yahei ui", 8.5F)
             };
 
             // ===== 回程設定區塊 =====
             CheckBox chkReturnToTown = new CheckBox
             {
-                Text = "🏠 回程（結束時自動回城）",
+                Text = "🏠 回程（結束時自動點擊回城）",
                 Left = 20,
                 Top = 170,
-                Width = 220,
+                Width = 250,
                 ForeColor = Color.FromArgb(100, 220, 160),
-                Font = new Font("Microsoft JhengHei UI", 9F, FontStyle.Bold),
-                Checked = false
+                Font = new Font("microsoft yahei ui", 9F, FontStyle.Bold),
+                Checked = true
             };
 
-            Label lblReturnCmd = new Label { Text = "指令：", Left = 250, Top = 172, Width = 45, ForeColor = Color.White };
-            TextBox txtReturnCmd = new TextBox
+            Label lblClickX = new Label { Text = "點擊 X:", Left = 280, Top = 172, Width = 50, ForeColor = Color.White };
+            NumericUpDown numClickX = new NumericUpDown
             {
-                Left = 295,
+                Left = 330,
                 Top = 169,
-                Width = 80,
+                Width = 65,
+                Minimum = 0,
+                Maximum = 3840,
+                Value = 652,
                 BackColor = Color.FromArgb(60, 60, 65),
                 ForeColor = Color.LightGreen,
-                Text = "@FM",
-                Enabled = false
+                Enabled = true
             };
 
-            Label lblSitKey = new Label { Text = "坐下：", Left = 385, Top = 172, Width = 45, ForeColor = Color.White };
+            Label lblClickY = new Label { Text = "Y:", Left = 400, Top = 172, Width = 20, ForeColor = Color.White };
+            NumericUpDown numClickY = new NumericUpDown
+            {
+                Left = 420,
+                Top = 169,
+                Width = 65,
+                Minimum = 0,
+                Maximum = 2160,
+                Value = 882,
+                BackColor = Color.FromArgb(60, 60, 65),
+                ForeColor = Color.LightGreen,
+                Enabled = true
+            };
+
+            Label lblSitKey = new Label { Text = "坐下：", Left = 495, Top = 172, Width = 45, ForeColor = Color.White };
             TextBox txtSitKey = new TextBox
             {
-                Left = 430,
+                Left = 540,
                 Top = 169,
-                Width = 100,
+                Width = 60,
                 ReadOnly = true,
                 BackColor = Color.FromArgb(60, 60, 65),
                 ForeColor = Color.Cyan,
-                Text = "(點擊設定)",
-                Enabled = false,
+                Text = "(設定)",
+                Enabled = true,
                 Tag = Keys.None
             };
 
@@ -4565,23 +4550,24 @@ namespace MapleStoryMacro
                 Increment = 0.5m,
                 BackColor = Color.FromArgb(60, 60, 65),
                 ForeColor = Color.White,
-                Enabled = false
+                Enabled = true
             };
             Label lblSitDelayUnit = new Label
             {
-                Text = "秒後坐下 | 序列：Enter → 指令 → Enter → 等待 → 坐下鍵",
+                Text = "秒後坐下 | 序列：停止腳本 → 冷卻2s → 點擊(X,Y) → Enter → 坐下",
                 Left = 130,
                 Top = 200,
-                Width = 450,
+                Width = 470,
                 ForeColor = Color.Gray,
-                Font = new Font("Microsoft JhengHei UI", 8.5F)
+                Font = new Font("microsoft yahei ui", 8.5F)
             };
 
             // 回程勾選控制啟用/停用
             chkReturnToTown.CheckedChanged += (s, args) =>
             {
                 bool enabled = chkReturnToTown.Checked;
-                txtReturnCmd.Enabled = enabled;
+                numClickX.Enabled = enabled;
+                numClickY.Enabled = enabled;
                 txtSitKey.Enabled = enabled;
                 numSitDelay.Enabled = enabled;
             };
@@ -4618,7 +4604,7 @@ namespace MapleStoryMacro
                 Top = 270,
                 Width = 200,
                 ForeColor = Color.Yellow,
-                Font = new Font("Microsoft JhengHei UI", 10F, FontStyle.Bold)
+                Font = new Font("microsoft yahei ui", 10F, FontStyle.Bold)
             };
 
             DataGridView dgv = new DataGridView
@@ -4708,7 +4694,8 @@ namespace MapleStoryMacro
                     Enabled = true,
                     HasStarted = false,
                     ReturnToTownEnabled = chkReturnToTown.Checked,
-                    ReturnCommand = txtReturnCmd.Text.Trim(),
+                    ReturnClickX = (int)numClickX.Value,
+                    ReturnClickY = (int)numClickY.Value,
                     SitDownDelaySeconds = (double)numSitDelay.Value
                 };
 
@@ -4723,7 +4710,7 @@ namespace MapleStoryMacro
                 refreshTaskList();
 
                 string endInfo = chkEndTime.Checked ? $", 結束={dtpEnd.Value:HH:mm:ss}" : "";
-                string returnInfo = chkReturnToTown.Checked ? $", 回程={txtReturnCmd.Text}" : "";
+                string returnInfo = chkReturnToTown.Checked ? $", 回程=點擊({numClickX.Value},{numClickY.Value})" : "";
                 AddLog($"新增排程：{(string.IsNullOrEmpty(scriptPath) ? "當前腳本" : Path.GetFileName(scriptPath))}, 開始={dtpStart.Value:HH:mm:ss}{endInfo}, 循環={numLoop.Value}{returnInfo}");
             };
 
@@ -4796,7 +4783,7 @@ namespace MapleStoryMacro
                 Top = 530,
                 Width = 280,
                 ForeColor = Color.Yellow,
-                Font = new Font("Microsoft JhengHei UI", 9F)
+                Font = new Font("microsoft yahei ui", 9F)
             };
 
             System.Windows.Forms.Timer countdownTimer = new System.Windows.Forms.Timer { Interval = 1000 };
@@ -4839,7 +4826,7 @@ namespace MapleStoryMacro
                 lblScript, txtScriptPath, btnBrowse, btnUseCurrent,
                 lblStart, dtpStart, lblEnd, chkEndTime, dtpEnd,
                 lblLoop, numLoop, lblLoopHint,
-                chkReturnToTown, lblReturnCmd, txtReturnCmd, lblSitKey, txtSitKey,
+                chkReturnToTown, lblClickX, numClickX, lblClickY, numClickY, lblSitKey, txtSitKey,
                 lblSitDelay, numSitDelay, lblSitDelayUnit,
                 btnAddTask,
                 lblListTitle, dgv,
@@ -4875,7 +4862,7 @@ namespace MapleStoryMacro
                 Width = 400,
                 Height = 25,
                 ForeColor = statistics.CurrentSessionStart.HasValue ? Color.Lime : Color.Gray,
-                Font = new Font("Microsoft JhengHei UI", 12F, FontStyle.Bold),
+                Font = new Font("microsoft yahei ui", 12F, FontStyle.Bold),
                 Text = statistics.CurrentSessionStart.HasValue ? "● 播放中" : "○ 已停止"
             };
 
@@ -4887,7 +4874,7 @@ namespace MapleStoryMacro
                 Width = 200,
                 Height = 20,
                 ForeColor = Color.Cyan,
-                Font = new Font("Microsoft JhengHei UI", 10F, FontStyle.Bold),
+                Font = new Font("microsoft yahei ui", 10F, FontStyle.Bold),
                 Text = "📌 當前會話"
             };
 
@@ -4920,7 +4907,7 @@ namespace MapleStoryMacro
                 Width = 380,
                 Height = 20,
                 ForeColor = Color.LightGray,
-                Font = new Font("Microsoft JhengHei UI", 9F),
+                Font = new Font("microsoft yahei ui", 9F),
                 Text = $"腳本事件: {recordedEvents.Count} 個"
             };
 
@@ -4942,7 +4929,7 @@ namespace MapleStoryMacro
                 Width = 200,
                 Height = 20,
                 ForeColor = Color.Yellow,
-                Font = new Font("Microsoft JhengHei UI", 10F, FontStyle.Bold),
+                Font = new Font("microsoft yahei ui", 10F, FontStyle.Bold),
                 Text = "📈 累計統計"
             };
 
@@ -4975,7 +4962,7 @@ namespace MapleStoryMacro
                 Width = 380,
                 Height = 20,
                 ForeColor = Color.LightGray,
-                Font = new Font("Microsoft JhengHei UI", 9F),
+                Font = new Font("microsoft yahei ui", 9F),
                 Text = $"最後播放: {(statistics.LastPlayTime.HasValue ? statistics.LastPlayTime.Value.ToString("yyyy-MM-dd HH:mm:ss") : "從未播放")}"
             };
 
@@ -4997,7 +4984,7 @@ namespace MapleStoryMacro
                 Width = 200,
                 Height = 20,
                 ForeColor = Color.FromArgb(200, 150, 255),
-                Font = new Font("Microsoft JhengHei UI", 10F, FontStyle.Bold),
+                Font = new Font("microsoft yahei ui", 10F, FontStyle.Bold),
                 Text = "⚡ 自定義按鍵觸發"
             };
 
@@ -5240,7 +5227,7 @@ namespace MapleStoryMacro
                 Text = "小地圖預覽 (點擊角色圖標學習顏色)",
                 Left = 15, Top = 15, Width = 350, Height = 300,
                 ForeColor = Color.White,
-                Font = new Font("Microsoft JhengHei UI", 9F)
+                Font = new Font("microsoft yahei ui", 9F)
             };
 
             PictureBox picMinimap = new PictureBox
@@ -5256,7 +5243,7 @@ namespace MapleStoryMacro
             {
                 Left = 10, Top = 250, Width = 330, Height = 20,
                 ForeColor = Color.LightGray,
-                Font = new Font("Microsoft JhengHei UI", 8.5F),
+                Font = new Font("microsoft yahei ui", 8.5F),
                 Text = "區域: 未設定"
             };
 
@@ -5264,7 +5251,7 @@ namespace MapleStoryMacro
             {
                 Left = 10, Top = 272, Width = 330, Height = 20,
                 ForeColor = Color.Yellow,
-                Font = new Font("Microsoft JhengHei UI", 8.5F),
+                Font = new Font("microsoft yahei ui", 8.5F),
                 Text = "💡 點擊預覽圖上的角色圖標來學習顏色"
             };
 
@@ -5276,7 +5263,7 @@ namespace MapleStoryMacro
                 Text = "📍 小地圖區域",
                 Left = 380, Top = 15, Width = 345, Height = 100,
                 ForeColor = Color.White,
-                Font = new Font("Microsoft JhengHei UI", 9F)
+                Font = new Font("microsoft yahei ui", 9F)
             };
 
             Label lblX = new Label { Text = "X:", Left = 15, Top = 28, Width = 25, ForeColor = Color.LightGray };
@@ -5295,7 +5282,7 @@ namespace MapleStoryMacro
                 BackColor = Color.FromArgb(0, 140, 80),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Microsoft JhengHei UI", 9F, FontStyle.Bold)
+                Font = new Font("microsoft yahei ui", 9F, FontStyle.Bold)
             };
 
             Button btnCapture = new Button
@@ -5315,7 +5302,7 @@ namespace MapleStoryMacro
                 Text = "🎯 活動範圍邊界 (移動角色後點擊設定)",
                 Left = 380, Top = 120, Width = 345, Height = 130,
                 ForeColor = Color.White,
-                Font = new Font("Microsoft JhengHei UI", 9F)
+                Font = new Font("microsoft yahei ui", 9F)
             };
 
             Label lblBoundLeft = new Label { Text = "左: ---", Left = 15, Top = 25, Width = 70, ForeColor = Color.LightGray };
@@ -5330,7 +5317,7 @@ namespace MapleStoryMacro
 
             Button btnResetBounds = new Button { Text = "🔄 重設", Left = 15, Top = 85, Width = 75, Height = 28, BackColor = Color.FromArgb(100, 60, 60), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
 
-            Label lblBoundTip = new Label { Text = "F7: 依序設定左→右→上→下", Left = 100, Top = 92, Width = 220, ForeColor = Color.Cyan, Font = new Font("Microsoft JhengHei UI", 8F) };
+            Label lblBoundTip = new Label { Text = "F7: 依序設定左→右→上→下", Left = 100, Top = 92, Width = 220, ForeColor = Color.Cyan, Font = new Font("microsoft yahei ui", 8F) };
 
             grpBounds.Controls.AddRange(new Control[] { lblBoundLeft, lblBoundRight, lblBoundTop, lblBoundBottom, btnSetLeft, btnSetRight, btnSetTop, btnSetBottom, btnResetBounds, lblBoundTip });
 
@@ -5340,7 +5327,7 @@ namespace MapleStoryMacro
                 Text = "🎨 角色圖標顏色 (點擊預覽圖學習)",
                 Left = 380, Top = 255, Width = 345, Height = 60,
                 ForeColor = Color.White,
-                Font = new Font("Microsoft JhengHei UI", 9F)
+                Font = new Font("microsoft yahei ui", 9F)
             };
 
             Label lblHue = new Label { Text = "色相:", Left = 15, Top = 25, Width = 40, ForeColor = Color.LightGray };
@@ -5362,7 +5349,7 @@ namespace MapleStoryMacro
                 Text = "📊 偵測結果",
                 Left = 15, Top = 320, Width = 710, Height = 100,
                 ForeColor = Color.White,
-                Font = new Font("Microsoft JhengHei UI", 9F)
+                Font = new Font("microsoft yahei ui", 9F)
             };
 
             Label lblDetectResult = new Label
@@ -5409,7 +5396,7 @@ namespace MapleStoryMacro
                 BackColor = Color.FromArgb(180, 120, 0),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Microsoft JhengHei UI", 10F, FontStyle.Bold)
+                Font = new Font("microsoft yahei ui", 10F, FontStyle.Bold)
             };
 
             Button btnSave = new Button
@@ -5419,7 +5406,7 @@ namespace MapleStoryMacro
                 BackColor = Color.FromArgb(0, 140, 80),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Microsoft JhengHei UI", 10F, FontStyle.Bold)
+                Font = new Font("microsoft yahei ui", 10F, FontStyle.Bold)
             };
 
             Button btnClose = new Button
@@ -5435,7 +5422,7 @@ namespace MapleStoryMacro
             {
                 Left = 15, Top = 445, Width = 440, Height = 25,
                 ForeColor = hasCalibration ? Color.Lime : Color.Gray,
-                Font = new Font("Microsoft JhengHei UI", 9F),
+                Font = new Font("microsoft yahei ui", 9F),
                 Text = hasCalibration ? "✅ 已載入先前的校準設定" : "⚠️ 尚未校準"
             };
 
@@ -6011,7 +5998,7 @@ namespace MapleStoryMacro
             CheckBox chkEnabled = new CheckBox
             {
                 Text = "啟用位置修正", Left = 15, Top = 10, Width = 200,
-                ForeColor = Color.White, Font = new Font("Microsoft JhengHei UI", 10F, FontStyle.Bold),
+                ForeColor = Color.White, Font = new Font("microsoft yahei ui", 10F, FontStyle.Bold),
                 Checked = positionCorrectionSettings.Enabled
             };
 
@@ -6020,14 +6007,14 @@ namespace MapleStoryMacro
             {
                 Text = "📌 即時比對腳本錄製座標，每隔設定秒數檢查並修正偏差（水平/垂直獨立容差）",
                 Left = 15, Top = 42, Width = 575, Height = 30,
-                ForeColor = Color.FromArgb(120, 200, 255), Font = new Font("Microsoft JhengHei UI", 9F)
+                ForeColor = Color.FromArgb(120, 200, 255), Font = new Font("microsoft yahei ui", 9F)
             };
 
             // ===== 按鍵設定 =====
             GroupBox grpK = new GroupBox
             {
                 Text = "⌨️ 移動按鍵 (點擊框後按下單鍵或組合鍵)", Left = 15, Top = 72, Width = 575, Height = 88,
-                ForeColor = Color.White, Font = new Font("Microsoft JhengHei UI", 9F)
+                ForeColor = Color.White, Font = new Font("microsoft yahei ui", 9F)
             };
             Keys[] cL = positionCorrectionSettings.GetEffectiveLeftKeys(), cR = positionCorrectionSettings.GetEffectiveRightKeys();
             Keys[] cU = positionCorrectionSettings.GetEffectiveUpKeys(), cD = positionCorrectionSettings.GetEffectiveDownKeys();
@@ -6133,7 +6120,7 @@ namespace MapleStoryMacro
             {
                 Text = "🔬 方向診斷 (先確認每個按鍵實際讓角色往哪移動)",
                 Left = 15, Top = paramY2 + 35, Width = 575, Height = 80,
-                ForeColor = Color.Yellow, Font = new Font("Microsoft JhengHei UI", 9F)
+                ForeColor = Color.Yellow, Font = new Font("microsoft yahei ui", 9F)
             };
             Button bDL = new Button { Text = "測試 ←左", Left = 10, Top = 22, Width = 75, Height = 26, BackColor = Color.FromArgb(60, 60, 70), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
             Button bDR = new Button { Text = "測試 →右", Left = 90, Top = 22, Width = 75, Height = 26, BackColor = Color.FromArgb(60, 60, 70), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
@@ -6146,7 +6133,7 @@ namespace MapleStoryMacro
             GroupBox grpLog = new GroupBox
             {
                 Text = "📋 修正日誌", Left = 15, Top = paramY2 + 120, Width = 575, Height = 190,
-                ForeColor = Color.White, Font = new Font("Microsoft JhengHei UI", 9F)
+                ForeColor = Color.White, Font = new Font("microsoft yahei ui", 9F)
             };
             TextBox txtLog = new TextBox
             {
@@ -6157,7 +6144,7 @@ namespace MapleStoryMacro
             };
             Button btnTestCorr = new Button { Text = "🧪 測試修正", Left = 5, Top = 152, Width = 100, Height = 28, BackColor = Color.FromArgb(180, 120, 0), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
             Button btnClearLog = new Button { Text = "清除", Left = 110, Top = 152, Width = 55, Height = 28, BackColor = Color.FromArgb(60, 60, 70), ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
-            Label lblTestRes = new Label { Left = 175, Top = 157, Width = 390, Height = 20, ForeColor = Color.LightGray, Font = new Font("Microsoft JhengHei UI", 9F) };
+            Label lblTestRes = new Label { Left = 175, Top = 157, Width = 390, Height = 20, ForeColor = Color.LightGray, Font = new Font("microsoft yahei ui", 9F) };
             grpLog.Controls.AddRange(new Control[] { txtLog, btnTestCorr, btnClearLog, lblTestRes });
 
             // ===== 底部 =====

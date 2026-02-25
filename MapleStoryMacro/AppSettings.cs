@@ -123,12 +123,22 @@ namespace MapleStoryMacro
         public bool HasStarted { get; set; } = false;
 
         /// <summary>
-        /// 是否啟用回程功能（Enter → @FM → Enter → 等待 → 坐下）
+        /// 是否啟用回程功能（停止腳本 → 冷卻 → 滑鼠點擊 → Enter）
         /// </summary>
         public bool ReturnToTownEnabled { get; set; } = false;
 
         /// <summary>
-        /// 回程指令（預設 @FM）
+        /// 回程點擊座標 X（Client Area）
+        /// </summary>
+        public int ReturnClickX { get; set; } = 652;
+
+        /// <summary>
+        /// 回程點擊座標 Y（Client Area）
+        /// </summary>
+        public int ReturnClickY { get; set; } = 882;
+
+        /// <summary>
+        /// 回程指令（已棄用，保留向後兼容）
         /// </summary>
         public string ReturnCommand { get; set; } = "@FM";
 

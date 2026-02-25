@@ -79,7 +79,7 @@ namespace MapleStoryMacro
             txtWindowTitle.BaseColor = Color.FromArgb(44, 55, 66);
             txtWindowTitle.BorderColorA = Color.FromArgb(64, 158, 255);
             txtWindowTitle.BorderColorB = Color.FromArgb(220, 223, 230);
-            txtWindowTitle.Font = new Font("Segoe UI", 10F);
+            txtWindowTitle.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
             txtWindowTitle.ForeColor = Color.FromArgb(48, 49, 51);
             txtWindowTitle.Hint = "";
             txtWindowTitle.Location = new Point(19, 23);
@@ -91,7 +91,7 @@ namespace MapleStoryMacro
             txtWindowTitle.SelectedText = "";
             txtWindowTitle.SelectionLength = 0;
             txtWindowTitle.SelectionStart = 0;
-            txtWindowTitle.Size = new Size(200, 34);
+            txtWindowTitle.Size = new Size(200, 32);
             txtWindowTitle.TabIndex = 0;
             txtWindowTitle.TabStop = false;
             txtWindowTitle.Text = "MapleStory";
@@ -100,11 +100,11 @@ namespace MapleStoryMacro
             // lblStatus
             // 
             lblStatus.AutoSize = true;
-            lblStatus.Font = new Font("Microsoft JhengHei UI", 9F);
+            lblStatus.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
             lblStatus.ForeColor = Color.White;
             lblStatus.Location = new Point(19, 68);
             lblStatus.Name = "lblStatus";
-            lblStatus.Size = new Size(61, 15);
+            lblStatus.Size = new Size(63, 17);
             lblStatus.TabIndex = 1;
             lblStatus.Text = "狀態: 就緒";
             // 
@@ -113,13 +113,14 @@ namespace MapleStoryMacro
             lstLog.BackColor = Color.FromArgb(30, 30, 35);
             lstLog.BorderStyle = BorderStyle.FixedSingle;
             lstLog.ContextMenuStrip = logContextMenu;
+            lstLog.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
             lstLog.ForeColor = Color.LightGray;
             lstLog.FormattingEnabled = true;
-            lstLog.ItemHeight = 15;
+            lstLog.ItemHeight = 17;
             lstLog.Location = new Point(22, 96);
             lstLog.Name = "lstLog";
             lstLog.SelectionMode = SelectionMode.MultiExtended;
-            lstLog.Size = new Size(633, 227);
+            lstLog.Size = new Size(633, 223);
             lstLog.TabIndex = 30;
             // 
             // logContextMenu
@@ -161,7 +162,7 @@ namespace MapleStoryMacro
             btnStartRecording.Effect_2 = true;
             btnStartRecording.Effect_2_ColorBackground = Color.White;
             btnStartRecording.Effect_2_Transparency = 20;
-            btnStartRecording.Font = new Font("Microsoft JhengHei UI", 9F);
+            btnStartRecording.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
             btnStartRecording.ForeColor = Color.FromArgb(245, 245, 245);
             btnStartRecording.Lighting = false;
             btnStartRecording.LinearGradient_Background = false;
@@ -202,7 +203,7 @@ namespace MapleStoryMacro
             btnStopRecording.Effect_2_ColorBackground = Color.White;
             btnStopRecording.Effect_2_Transparency = 20;
             btnStopRecording.Enabled = false;
-            btnStopRecording.Font = new Font("Microsoft JhengHei UI", 9F);
+            btnStopRecording.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
             btnStopRecording.ForeColor = Color.FromArgb(245, 245, 245);
             btnStopRecording.Lighting = false;
             btnStopRecording.LinearGradient_Background = false;
@@ -242,7 +243,7 @@ namespace MapleStoryMacro
             btnRefreshWindow.Effect_2 = true;
             btnRefreshWindow.Effect_2_ColorBackground = Color.White;
             btnRefreshWindow.Effect_2_Transparency = 20;
-            btnRefreshWindow.Font = new Font("Microsoft JhengHei UI", 9F);
+            btnRefreshWindow.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
             btnRefreshWindow.ForeColor = Color.FromArgb(245, 245, 245);
             btnRefreshWindow.Lighting = false;
             btnRefreshWindow.LinearGradient_Background = false;
@@ -282,7 +283,7 @@ namespace MapleStoryMacro
             btnLockWindow.Effect_2 = true;
             btnLockWindow.Effect_2_ColorBackground = Color.White;
             btnLockWindow.Effect_2_Transparency = 20;
-            btnLockWindow.Font = new Font("Microsoft JhengHei UI", 9F);
+            btnLockWindow.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
             btnLockWindow.ForeColor = Color.FromArgb(245, 245, 245);
             btnLockWindow.Lighting = false;
             btnLockWindow.LinearGradient_Background = false;
@@ -322,7 +323,7 @@ namespace MapleStoryMacro
             btnSaveScript.Effect_2 = true;
             btnSaveScript.Effect_2_ColorBackground = Color.White;
             btnSaveScript.Effect_2_Transparency = 20;
-            btnSaveScript.Font = new Font("Microsoft JhengHei UI", 9F);
+            btnSaveScript.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
             btnSaveScript.ForeColor = Color.FromArgb(245, 245, 245);
             btnSaveScript.Lighting = false;
             btnSaveScript.LinearGradient_Background = false;
@@ -362,7 +363,7 @@ namespace MapleStoryMacro
             btnLoadScript.Effect_2 = true;
             btnLoadScript.Effect_2_ColorBackground = Color.White;
             btnLoadScript.Effect_2_Transparency = 20;
-            btnLoadScript.Font = new Font("Microsoft JhengHei UI", 9F);
+            btnLoadScript.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
             btnLoadScript.ForeColor = Color.FromArgb(245, 245, 245);
             btnLoadScript.Lighting = false;
             btnLoadScript.LinearGradient_Background = false;
@@ -482,7 +483,7 @@ namespace MapleStoryMacro
             btnEditEvents.Effect_2 = true;
             btnEditEvents.Effect_2_ColorBackground = Color.White;
             btnEditEvents.Effect_2_Transparency = 20;
-            btnEditEvents.Font = new Font("Microsoft JhengHei UI", 9F);
+            btnEditEvents.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
             btnEditEvents.ForeColor = Color.FromArgb(245, 245, 245);
             btnEditEvents.Lighting = false;
             btnEditEvents.LinearGradient_Background = false;
@@ -522,7 +523,7 @@ namespace MapleStoryMacro
             btnStartPlayback.Effect_2 = true;
             btnStartPlayback.Effect_2_ColorBackground = Color.White;
             btnStartPlayback.Effect_2_Transparency = 20;
-            btnStartPlayback.Font = new Font("Microsoft JhengHei UI", 9F, FontStyle.Bold);
+            btnStartPlayback.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
             btnStartPlayback.ForeColor = Color.FromArgb(245, 245, 245);
             btnStartPlayback.Lighting = false;
             btnStartPlayback.LinearGradient_Background = false;
@@ -563,7 +564,7 @@ namespace MapleStoryMacro
             btnStopPlayback.Effect_2_ColorBackground = Color.White;
             btnStopPlayback.Effect_2_Transparency = 20;
             btnStopPlayback.Enabled = false;
-            btnStopPlayback.Font = new Font("Microsoft JhengHei UI", 9F, FontStyle.Bold);
+            btnStopPlayback.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
             btnStopPlayback.ForeColor = Color.FromArgb(245, 245, 245);
             btnStopPlayback.Lighting = false;
             btnStopPlayback.LinearGradient_Background = false;
@@ -598,33 +599,33 @@ namespace MapleStoryMacro
             // lblWindowStatus
             // 
             lblWindowStatus.AutoSize = true;
-            lblWindowStatus.Font = new Font("Microsoft JhengHei UI", 9F);
+            lblWindowStatus.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
             lblWindowStatus.ForeColor = Color.LightGray;
             lblWindowStatus.Location = new Point(19, 536);
             lblWindowStatus.Name = "lblWindowStatus";
-            lblWindowStatus.Size = new Size(106, 15);
+            lblWindowStatus.Size = new Size(108, 17);
             lblWindowStatus.TabIndex = 14;
             lblWindowStatus.Text = "視窗狀態: 尋找中...";
             // 
             // lblRecordingStatus
             // 
             lblRecordingStatus.AutoSize = true;
-            lblRecordingStatus.Font = new Font("Microsoft JhengHei UI", 9F);
+            lblRecordingStatus.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
             lblRecordingStatus.ForeColor = Color.LightGray;
             lblRecordingStatus.Location = new Point(19, 556);
             lblRecordingStatus.Name = "lblRecordingStatus";
-            lblRecordingStatus.Size = new Size(143, 15);
+            lblRecordingStatus.Size = new Size(149, 17);
             lblRecordingStatus.TabIndex = 15;
             lblRecordingStatus.Text = "錄製狀態: 就緒 | 事件數: 0";
             // 
             // lblPlaybackStatus
             // 
             lblPlaybackStatus.AutoSize = true;
-            lblPlaybackStatus.Font = new Font("Microsoft JhengHei UI", 9F);
+            lblPlaybackStatus.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
             lblPlaybackStatus.ForeColor = Color.LightGray;
             lblPlaybackStatus.Location = new Point(19, 576);
             lblPlaybackStatus.Name = "lblPlaybackStatus";
-            lblPlaybackStatus.Size = new Size(85, 15);
+            lblPlaybackStatus.Size = new Size(87, 17);
             lblPlaybackStatus.TabIndex = 16;
             lblPlaybackStatus.Text = "播放狀態: 就緒";
             // 
@@ -649,7 +650,7 @@ namespace MapleStoryMacro
             btnHotkeySettings.Effect_2 = true;
             btnHotkeySettings.Effect_2_ColorBackground = Color.White;
             btnHotkeySettings.Effect_2_Transparency = 20;
-            btnHotkeySettings.Font = new Font("Microsoft JhengHei UI", 9F);
+            btnHotkeySettings.Font = new Font("Microsoft JhengHei UI", 9F, FontStyle.Bold, GraphicsUnit.Point, 136);
             btnHotkeySettings.ForeColor = Color.FromArgb(245, 245, 245);
             btnHotkeySettings.Lighting = false;
             btnHotkeySettings.LinearGradient_Background = false;
@@ -689,7 +690,7 @@ namespace MapleStoryMacro
             btnCustomKeys.Effect_2 = true;
             btnCustomKeys.Effect_2_ColorBackground = Color.White;
             btnCustomKeys.Effect_2_Transparency = 20;
-            btnCustomKeys.Font = new Font("Microsoft JhengHei UI", 9F);
+            btnCustomKeys.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
             btnCustomKeys.ForeColor = Color.FromArgb(245, 245, 245);
             btnCustomKeys.Lighting = false;
             btnCustomKeys.LinearGradient_Background = false;
@@ -729,7 +730,7 @@ namespace MapleStoryMacro
             btnScheduler.Effect_2 = true;
             btnScheduler.Effect_2_ColorBackground = Color.White;
             btnScheduler.Effect_2_Transparency = 20;
-            btnScheduler.Font = new Font("Microsoft JhengHei UI", 9F);
+            btnScheduler.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
             btnScheduler.ForeColor = Color.FromArgb(245, 245, 245);
             btnScheduler.Lighting = false;
             btnScheduler.LinearGradient_Background = false;
@@ -769,7 +770,7 @@ namespace MapleStoryMacro
             btnStatistics.Effect_2 = true;
             btnStatistics.Effect_2_ColorBackground = Color.White;
             btnStatistics.Effect_2_Transparency = 20;
-            btnStatistics.Font = new Font("Microsoft JhengHei UI", 9F);
+            btnStatistics.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
             btnStatistics.ForeColor = Color.FromArgb(245, 245, 245);
             btnStatistics.Lighting = false;
             btnStatistics.LinearGradient_Background = false;
@@ -809,7 +810,7 @@ namespace MapleStoryMacro
             btnMemoryScanner.Effect_2 = true;
             btnMemoryScanner.Effect_2_ColorBackground = Color.White;
             btnMemoryScanner.Effect_2_Transparency = 20;
-            btnMemoryScanner.Font = new Font("Microsoft JhengHei UI", 9F);
+            btnMemoryScanner.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
             btnMemoryScanner.ForeColor = Color.FromArgb(245, 245, 245);
             btnMemoryScanner.Lighting = false;
             btnMemoryScanner.LinearGradient_Background = false;
@@ -850,7 +851,7 @@ namespace MapleStoryMacro
             btnSaveSettings.Effect_2 = true;
             btnSaveSettings.Effect_2_ColorBackground = Color.White;
             btnSaveSettings.Effect_2_Transparency = 20;
-            btnSaveSettings.Font = new Font("Microsoft JhengHei UI", 9F);
+            btnSaveSettings.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
             btnSaveSettings.ForeColor = Color.FromArgb(245, 245, 245);
             btnSaveSettings.Lighting = false;
             btnSaveSettings.LinearGradient_Background = false;
@@ -891,7 +892,7 @@ namespace MapleStoryMacro
             btnImportSettings.Effect_2 = true;
             btnImportSettings.Effect_2_ColorBackground = Color.White;
             btnImportSettings.Effect_2_Transparency = 20;
-            btnImportSettings.Font = new Font("Microsoft JhengHei UI", 9F);
+            btnImportSettings.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
             btnImportSettings.ForeColor = Color.FromArgb(245, 245, 245);
             btnImportSettings.Lighting = false;
             btnImportSettings.LinearGradient_Background = false;
@@ -929,7 +930,7 @@ namespace MapleStoryMacro
             grpRecording.Controls.Add(btnStartRecording);
             grpRecording.Controls.Add(btnStopRecording);
             grpRecording.CyberGroupBoxStyle = ReaLTaiizor.Enum.Cyber.StateStyle.Custom;
-            grpRecording.Font = new Font("Microsoft JhengHei UI", 9F, FontStyle.Bold);
+            grpRecording.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
             grpRecording.ForeColor = Color.White;
             grpRecording.Lighting = false;
             grpRecording.LinearGradient_Background = false;
@@ -954,7 +955,7 @@ namespace MapleStoryMacro
             label2.AutoSize = true;
             label2.Location = new Point(56, 12);
             label2.Name = "label2";
-            label2.Size = new Size(55, 15);
+            label2.Size = new Size(56, 17);
             label2.TabIndex = 6;
             label2.Text = "錄製控制";
             // 
@@ -977,7 +978,7 @@ namespace MapleStoryMacro
             grpScript.Controls.Add(btnLoadScript);
             grpScript.Controls.Add(btnEditEvents);
             grpScript.CyberGroupBoxStyle = ReaLTaiizor.Enum.Cyber.StateStyle.Custom;
-            grpScript.Font = new Font("Microsoft JhengHei UI", 9F, FontStyle.Bold);
+            grpScript.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
             grpScript.ForeColor = Color.White;
             grpScript.Lighting = false;
             grpScript.LinearGradient_Background = false;
@@ -1002,7 +1003,7 @@ namespace MapleStoryMacro
             label3.AutoSize = true;
             label3.Location = new Point(92, 12);
             label3.Name = "label3";
-            label3.Size = new Size(55, 15);
+            label3.Size = new Size(56, 17);
             label3.TabIndex = 11;
             label3.Text = "腳本管理";
             // 
@@ -1024,7 +1025,7 @@ namespace MapleStoryMacro
             grpEvents.Controls.Add(btnHotkeySettings);
             grpEvents.Controls.Add(cmbArrowMode);
             grpEvents.CyberGroupBoxStyle = ReaLTaiizor.Enum.Cyber.StateStyle.Custom;
-            grpEvents.Font = new Font("Microsoft JhengHei UI", 9F, FontStyle.Bold);
+            grpEvents.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
             grpEvents.ForeColor = Color.White;
             grpEvents.Lighting = false;
             grpEvents.LinearGradient_Background = false;
@@ -1049,7 +1050,7 @@ namespace MapleStoryMacro
             label6.AutoSize = true;
             label6.Location = new Point(95, 12);
             label6.Name = "label6";
-            label6.Size = new Size(31, 15);
+            label6.Size = new Size(32, 17);
             label6.TabIndex = 14;
             label6.Text = "設定";
             // 
@@ -1101,7 +1102,7 @@ namespace MapleStoryMacro
             grpPlayback.Controls.Add(lblLoopCount);
             grpPlayback.Controls.Add(numPlayTimes);
             grpPlayback.CyberGroupBoxStyle = ReaLTaiizor.Enum.Cyber.StateStyle.Custom;
-            grpPlayback.Font = new Font("Microsoft JhengHei UI", 9F, FontStyle.Bold);
+            grpPlayback.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
             grpPlayback.ForeColor = Color.White;
             grpPlayback.Lighting = false;
             grpPlayback.LinearGradient_Background = false;
@@ -1126,7 +1127,7 @@ namespace MapleStoryMacro
             label1.AutoSize = true;
             label1.Location = new Point(132, 12);
             label1.Name = "label1";
-            label1.Size = new Size(55, 15);
+            label1.Size = new Size(56, 17);
             label1.TabIndex = 14;
             label1.Text = "播放控制";
             // 
@@ -1151,7 +1152,7 @@ namespace MapleStoryMacro
             txtPauseHotkey.Effect_2 = true;
             txtPauseHotkey.Effect_2_ColorBackground = Color.White;
             txtPauseHotkey.Effect_2_Transparency = 20;
-            txtPauseHotkey.Font = new Font("Microsoft JhengHei UI", 9F, FontStyle.Bold);
+            txtPauseHotkey.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
             txtPauseHotkey.ForeColor = Color.FromArgb(245, 245, 245);
             txtPauseHotkey.Lighting = false;
             txtPauseHotkey.LinearGradient_Background = false;
@@ -1202,7 +1203,7 @@ namespace MapleStoryMacro
             grpAdvanced.Controls.Add(btnScheduler);
             grpAdvanced.Controls.Add(btnStatistics);
             grpAdvanced.CyberGroupBoxStyle = ReaLTaiizor.Enum.Cyber.StateStyle.Custom;
-            grpAdvanced.Font = new Font("Microsoft JhengHei UI", 9F, FontStyle.Bold);
+            grpAdvanced.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
             grpAdvanced.ForeColor = Color.White;
             grpAdvanced.Lighting = false;
             grpAdvanced.LinearGradient_Background = false;
@@ -1227,7 +1228,7 @@ namespace MapleStoryMacro
             label5.AutoSize = true;
             label5.Location = new Point(113, 12);
             label5.Name = "label5";
-            label5.Size = new Size(55, 15);
+            label5.Size = new Size(56, 17);
             label5.TabIndex = 14;
             label5.Text = "進階功能";
             // 
