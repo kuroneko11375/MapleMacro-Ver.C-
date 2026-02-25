@@ -207,6 +207,30 @@ namespace MapleStoryMacro
         private const uint WM_LBUTTONUP = 0x0202;
         private const uint MK_LBUTTON = 0x0001;
 
+        // Mouse click P/Invoke (前景滑鼠點擊用)
+        private const uint INPUT_MOUSE = 0;
+        private const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
+        private const uint MOUSEEVENTF_LEFTUP = 0x0004;
+
+        [DllImport("user32.dll")]
+        private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        private static extern bool ClientToScreen(IntPtr hWnd, ref POINT lpPoint);
+
+        [DllImport("user32.dll")]
+        private static extern bool SetCursorPos(int X, int Y);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct POINT
+        {
+            public int X;
+            public int Y;
+        }
+
         // 按鍵顯示名稱映射表
         private static readonly Dictionary<Keys, string> KeyDisplayNames = new Dictionary<Keys, string>
         {
@@ -3442,15 +3466,49 @@ namespace MapleStoryMacro
         }
 
         /// <summary>
-        /// 發送滑鼠點擊到背景視窗（Client Area 座標）
-        /// 使用 PostMessage 發送 WM_LBUTTONDOWN + WM_LBUTTONUP
+        /// 發送滑鼠點擊到視窗（Client Area 座標）
+        /// ★ 使用前景方式：SetCursorPos + SendInput（PM 滑鼠點擊在遊戲中無效）
+        /// 遊戲 UI 點擊時會檢查實際游標位置，純 PostMessage 無法觸發
         /// </summary>
         private void SendMouseClickToWindow(IntPtr hWnd, int clientX, int clientY)
         {
-            IntPtr lParam = (IntPtr)((clientY << 16) | (clientX & 0xFFFF));
-            PostMessage(hWnd, WM_LBUTTONDOWN, (IntPtr)MK_LBUTTON, lParam);
+            // 1. Client 座標轉 Screen 座標
+            POINT pt = new POINT { X = clientX, Y = clientY };
+            if (!ClientToScreen(hWnd, ref pt))
+            {
+                this.BeginInvoke(new Action(() => AddLog($"⚠️ ClientToScreen 失敗，嘗試直接使用座標")));
+                pt.X = clientX;
+                pt.Y = clientY;
+            }
+
+            // 2. 記住當前前景視窗
+            IntPtr prevForeground = GetForegroundWindow();
+
+            // 3. 將遊戲視窗帶到前景
+            SetForegroundWindow(hWnd);
+            Thread.Sleep(150);
+
+            // 4. 移動游標到目標位置
+            SetCursorPos(pt.X, pt.Y);
             Thread.Sleep(50);
-            PostMessage(hWnd, WM_LBUTTONUP, IntPtr.Zero, lParam);
+
+            // 5. 使用 SendInput 發送滑鼠點擊
+            INPUT[] inputs = new INPUT[2];
+            inputs[0].type = INPUT_MOUSE;
+            inputs[0].u.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+            inputs[0].u.mi.time = 0;
+            inputs[0].u.mi.dwExtraInfo = IntPtr.Zero;
+
+            inputs[1].type = INPUT_MOUSE;
+            inputs[1].u.mi.dwFlags = MOUSEEVENTF_LEFTUP;
+            inputs[1].u.mi.time = 0;
+            inputs[1].u.mi.dwExtraInfo = IntPtr.Zero;
+
+            uint result = SendInput(2, inputs, Marshal.SizeOf(typeof(INPUT)));
+            if (result == 0)
+            {
+                this.BeginInvoke(new Action(() => AddLog($"⚠️ SendInput 滑鼠點擊失敗，錯誤碼: {Marshal.GetLastWin32Error()}")));
+            }
         }
 
         /// <summary>
