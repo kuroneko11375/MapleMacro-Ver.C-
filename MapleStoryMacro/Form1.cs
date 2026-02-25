@@ -231,6 +231,15 @@ namespace MapleStoryMacro
             public int Y;
         }
 
+        // 子視窗搜尋 P/Invoke（用於找 MapleStoryClass）
+        [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+        private static extern IntPtr FindWindowEx(IntPtr hwndParent, IntPtr hwndChildAfter, string? lpszClass, string? lpszWindow);
+
+        [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+        private static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+
+        private const uint WM_MOUSEMOVE = 0x0200;
+
         // 按鍵顯示名稱映射表
         private static readonly Dictionary<Keys, string> KeyDisplayNames = new Dictionary<Keys, string>
         {
@@ -3466,33 +3475,83 @@ namespace MapleStoryMacro
         }
 
         /// <summary>
+        /// 尋找遊戲渲染子視窗（MapleStoryClass 等）
+        /// 如果主視窗本身就是 MapleStoryClass，則返回主視窗
+        /// </summary>
+        private IntPtr FindGameRenderWindow(IntPtr hWndParent)
+        {
+            // 1. 檢查主視窗本身
+            StringBuilder className = new StringBuilder(256);
+            GetClassName(hWndParent, className, 256);
+            string parentClass = className.ToString();
+            if (parentClass.IndexOf("MapleStory", StringComparison.OrdinalIgnoreCase) >= 0)
+                return hWndParent;
+
+            // 2. 列舉子視窗尋找 MapleStoryClass
+            IntPtr found = IntPtr.Zero;
+            EnumChildWindows(hWndParent, (childHwnd, lParam) =>
+            {
+                StringBuilder childClassName = new StringBuilder(256);
+                GetClassName(childHwnd, childClassName, 256);
+                if (childClassName.ToString().IndexOf("MapleStory", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    found = childHwnd;
+                    return false; // 找到了，停止列舉
+                }
+                return true;
+            }, IntPtr.Zero);
+
+            // 3. 嘗試 FindWindowEx
+            if (found == IntPtr.Zero)
+                found = FindWindowEx(hWndParent, IntPtr.Zero, "MapleStoryClass", null);
+
+            return found != IntPtr.Zero ? found : hWndParent;
+        }
+
+        /// <summary>
         /// 發送滑鼠點擊到視窗（Client Area 座標）
-        /// ★ 使用前景方式：SetCursorPos + SendInput（PM 滑鼠點擊在遊戲中無效）
-        /// 遊戲 UI 點擊時會檢查實際游標位置，純 PostMessage 無法觸發
+        /// ★ 雙重策略：PM 到 MapleStoryClass + 前景 SendInput 補強
         /// </summary>
         private void SendMouseClickToWindow(IntPtr hWnd, int clientX, int clientY)
         {
-            // 1. Client 座標轉 Screen 座標
+            // ★ 找到遊戲渲染子視窗（MapleStoryClass）
+            IntPtr gameWnd = FindGameRenderWindow(hWnd);
+
+            StringBuilder cn = new StringBuilder(256);
+            GetClassName(gameWnd, cn, 256);
+            string targetClass = cn.ToString();
+            bool isGameClass = targetClass.IndexOf("MapleStory", StringComparison.OrdinalIgnoreCase) >= 0;
+
+            this.BeginInvoke(new Action(() =>
+                AddLog($"🖱️ 目標視窗: [{targetClass}] hWnd=0x{gameWnd:X} isGame={isGameClass}")));
+
+            // ★ 方式1: PostMessage 到 MapleStoryClass（背景點擊）
+            IntPtr lParamCoord = (IntPtr)((clientY << 16) | (clientX & 0xFFFF));
+
+            // 先送 WM_MOUSEMOVE 讓遊戲更新內部滑鼠位置狀態
+            PostMessage(gameWnd, WM_MOUSEMOVE, IntPtr.Zero, lParamCoord);
+            Thread.Sleep(50);
+
+            // 送 WM_LBUTTONDOWN + WM_LBUTTONUP
+            PostMessage(gameWnd, WM_LBUTTONDOWN, (IntPtr)MK_LBUTTON, lParamCoord);
+            Thread.Sleep(100);
+            PostMessage(gameWnd, WM_LBUTTONUP, IntPtr.Zero, lParamCoord);
+
+            this.BeginInvoke(new Action(() =>
+                AddLog($"🖱️ PM 點擊已送出 → [{targetClass}] ({clientX},{clientY})")));
+
+            // ★ 方式2: 前景 SendInput 補強（確保至少一種方式有效）
+            Thread.Sleep(150);
+
             POINT pt = new POINT { X = clientX, Y = clientY };
-            if (!ClientToScreen(hWnd, ref pt))
-            {
-                this.BeginInvoke(new Action(() => AddLog($"⚠️ ClientToScreen 失敗，嘗試直接使用座標")));
-                pt.X = clientX;
-                pt.Y = clientY;
-            }
+            ClientToScreen(gameWnd, ref pt);
 
-            // 2. 記住當前前景視窗
-            IntPtr prevForeground = GetForegroundWindow();
-
-            // 3. 將遊戲視窗帶到前景
             SetForegroundWindow(hWnd);
             Thread.Sleep(150);
 
-            // 4. 移動游標到目標位置
             SetCursorPos(pt.X, pt.Y);
             Thread.Sleep(50);
 
-            // 5. 使用 SendInput 發送滑鼠點擊
             INPUT[] inputs = new INPUT[2];
             inputs[0].type = INPUT_MOUSE;
             inputs[0].u.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
@@ -3505,10 +3564,9 @@ namespace MapleStoryMacro
             inputs[1].u.mi.dwExtraInfo = IntPtr.Zero;
 
             uint result = SendInput(2, inputs, Marshal.SizeOf(typeof(INPUT)));
-            if (result == 0)
-            {
-                this.BeginInvoke(new Action(() => AddLog($"⚠️ SendInput 滑鼠點擊失敗，錯誤碼: {Marshal.GetLastWin32Error()}")));
-            }
+
+            this.BeginInvoke(new Action(() =>
+                AddLog($"🖱️ 前景點擊已送出 → screen({pt.X},{pt.Y}) result={result}")));
         }
 
         /// <summary>
@@ -4645,11 +4703,42 @@ namespace MapleStoryMacro
                 txtSitKey.Tag = args.KeyCode;
             };
 
+            // 測試點擊按鈕
+            Button btnTestClick = new Button
+            {
+                Text = "🧪 測試點擊",
+                Left = 20,
+                Top = 230,
+                Width = 110,
+                Height = 30,
+                BackColor = Color.FromArgb(180, 120, 0),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
+            btnTestClick.Click += (s, args) =>
+            {
+                if (targetWindowHandle == IntPtr.Zero || !IsWindow(targetWindowHandle))
+                {
+                    MessageBox.Show("請先鎖定目標視窗！", "未鎖定", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                int tx = (int)numClickX.Value;
+                int ty = (int)numClickY.Value;
+                AddLog($"🧪 測試點擊: ({tx},{ty})");
+                Thread testThread = new Thread(() =>
+                {
+                    SendMouseClickToWindow(targetWindowHandle, tx, ty);
+                    this.BeginInvoke(new Action(() => AddLog($"🧪 測試點擊完成")));
+                })
+                { IsBackground = true };
+                testThread.Start();
+            };
+
             // 新增按鈕
             Button btnAddTask = new Button
             {
                 Text = "➕ 新增排程",
-                Left = 20,
+                Left = 140,
                 Top = 230,
                 Width = 120,
                 Height = 30,
@@ -4890,7 +4979,7 @@ namespace MapleStoryMacro
                 lblLoop, numLoop, lblLoopHint,
                 chkReturnToTown, lblClickX, numClickX, lblClickY, numClickY, lblSitKey, txtSitKey,
                 lblSitDelay, numSitDelay, lblSitDelayUnit,
-                btnAddTask,
+                btnTestClick, btnAddTask,
                 lblListTitle, dgv,
                 btnRemove, btnClearAll, btnClose, lblCountdown
             });
