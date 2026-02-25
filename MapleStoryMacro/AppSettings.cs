@@ -156,6 +156,26 @@ namespace MapleStoryMacro
         /// 回程後等待幾秒再坐下（預設 3 秒）
         /// </summary>
         public double SitDownDelaySeconds { get; set; } = 3.0;
+
+        /// <summary>
+        /// 是否啟用對話框偵測（點擊後截圖比對模板，偵測到才按 Enter）
+        /// </summary>
+        public bool DialogDetectionEnabled { get; set; } = false;
+
+        /// <summary>
+        /// 對話框模板圖片路徑（儲存在 AppData）
+        /// </summary>
+        public string DialogTemplatePath { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 對話框偵測最大重試次數（每次重試會重新點擊）
+        /// </summary>
+        public int DialogDetectionMaxRetries { get; set; } = 10;
+
+        /// <summary>
+        /// 對話框偵測匹配閾值 (0.0~1.0，越高越嚴格)
+        /// </summary>
+        public double DialogDetectionThreshold { get; set; } = 0.85;
     }
 
     /// <summary>

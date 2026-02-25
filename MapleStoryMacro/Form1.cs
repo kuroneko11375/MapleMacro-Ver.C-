@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -3509,6 +3510,143 @@ namespace MapleStoryMacro
         }
 
         /// <summary>
+        /// 對話框模板圖片儲存目錄
+        /// </summary>
+        private static readonly string DialogTemplateDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "MapleMacro", "templates");
+
+        /// <summary>
+        /// 截取遊戲視窗畫面（背景模式用 PrintWindow，前景用 null）
+        /// </summary>
+        private Bitmap? CaptureGameWindowForDetection()
+        {
+            if (targetWindowHandle == IntPtr.Zero || !IsWindow(targetWindowHandle))
+                return null;
+
+            if (minimapTracker == null)
+            {
+                minimapTracker = new MinimapTracker();
+                minimapTracker.AttachToWindow(targetWindowHandle);
+            }
+            else if (minimapTracker.TargetWindow != targetWindowHandle)
+            {
+                minimapTracker.AttachToWindow(targetWindowHandle);
+            }
+
+            return minimapTracker.CaptureFullWindow();
+        }
+
+        /// <summary>
+        /// 在大圖中搜尋模板圖片，返回匹配度最高的位置和分數
+        /// 使用 Sum of Absolute Differences (SAD) 演算法
+        /// </summary>
+        /// <param name="source">來源大圖</param>
+        /// <param name="template">要搜尋的模板小圖</param>
+        /// <param name="threshold">匹配閾值 (0.0~1.0)</param>
+        /// <returns>(匹配成功, 匹配度分數, 匹配位置X, 匹配位置Y)</returns>
+        private static (bool found, double score, int x, int y) FindTemplateInImage(
+            Bitmap source, Bitmap template, double threshold = 0.85)
+        {
+            if (source == null || template == null) return (false, 0, 0, 0);
+            if (template.Width > source.Width || template.Height > source.Height)
+                return (false, 0, 0, 0);
+
+            int srcW = source.Width, srcH = source.Height;
+            int tmpW = template.Width, tmpH = template.Height;
+
+            // 使用 LockBits 加速像素存取
+            var srcData = source.LockBits(new Rectangle(0, 0, srcW, srcH),
+                ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
+            var tmpData = template.LockBits(new Rectangle(0, 0, tmpW, tmpH),
+                ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
+
+            int srcStride = srcData.Stride;
+            int tmpStride = tmpData.Stride;
+            int srcBytes = srcStride * srcH;
+            int tmpBytes = tmpStride * tmpH;
+
+            byte[] srcPixels = new byte[srcBytes];
+            byte[] tmpPixels = new byte[tmpBytes];
+            Marshal.Copy(srcData.Scan0, srcPixels, 0, srcBytes);
+            Marshal.Copy(tmpData.Scan0, tmpPixels, 0, tmpBytes);
+
+            source.UnlockBits(srcData);
+            template.UnlockBits(tmpData);
+
+            double bestScore = 0;
+            int bestX = 0, bestY = 0;
+
+            // 模板的像素總數 * 3（RGB 通道）
+            long maxDiff = (long)tmpW * tmpH * 3 * 255;
+
+            // 每隔 2 像素搜尋以加速（粗搜），找到候選後精確驗證
+            int step = 2;
+            int searchW = srcW - tmpW;
+            int searchH = srcH - tmpH;
+
+            for (int sy = 0; sy <= searchH; sy += step)
+            {
+                for (int sx = 0; sx <= searchW; sx += step)
+                {
+                    // 快速預檢：只比對四個角落 + 中心的像素
+                    long quickDiff = 0;
+                    int[][] checkPoints = new int[][] {
+                        new[] {0, 0}, new[] {tmpW-1, 0}, new[] {0, tmpH-1}, new[] {tmpW-1, tmpH-1},
+                        new[] {tmpW/2, tmpH/2}
+                    };
+
+                    bool quickFail = false;
+                    foreach (var pt in checkPoints)
+                    {
+                        int srcIdx = (sy + pt[1]) * srcStride + (sx + pt[0]) * 3;
+                        int tmpIdx = pt[1] * tmpStride + pt[0] * 3;
+                        if (srcIdx + 2 >= srcBytes || tmpIdx + 2 >= tmpBytes) { quickFail = true; break; }
+
+                        int db = Math.Abs(srcPixels[srcIdx] - tmpPixels[tmpIdx]);
+                        int dg = Math.Abs(srcPixels[srcIdx + 1] - tmpPixels[tmpIdx + 1]);
+                        int dr = Math.Abs(srcPixels[srcIdx + 2] - tmpPixels[tmpIdx + 2]);
+                        if (db + dg + dr > 80) { quickFail = true; break; } // 單像素差距過大
+                    }
+                    if (quickFail) continue;
+
+                    // 完整比對
+                    long totalDiff = 0;
+                    bool earlyExit = false;
+                    long earlyThreshold = (long)(maxDiff * (1.0 - threshold));
+
+                    for (int ty = 0; ty < tmpH && !earlyExit; ty++)
+                    {
+                        for (int tx = 0; tx < tmpW; tx++)
+                        {
+                            int srcIdx = (sy + ty) * srcStride + (sx + tx) * 3;
+                            int tmpIdx = ty * tmpStride + tx * 3;
+
+                            totalDiff += Math.Abs(srcPixels[srcIdx] - tmpPixels[tmpIdx]);
+                            totalDiff += Math.Abs(srcPixels[srcIdx + 1] - tmpPixels[tmpIdx + 1]);
+                            totalDiff += Math.Abs(srcPixels[srcIdx + 2] - tmpPixels[tmpIdx + 2]);
+
+                            if (totalDiff > earlyThreshold) { earlyExit = true; break; }
+                        }
+                    }
+
+                    if (!earlyExit)
+                    {
+                        double score = 1.0 - (double)totalDiff / maxDiff;
+                        if (score > bestScore)
+                        {
+                            bestScore = score;
+                            bestX = sx;
+                            bestY = sy;
+                        }
+                    }
+                }
+            }
+
+            return (bestScore >= threshold, bestScore, bestX, bestY);
+        }
+
+        /// <summary>
         /// 發送滑鼠點擊到視窗（Client Area 座標）
         /// ★ 雙重策略：PM 到 MapleStoryClass + 前景 SendInput 補強
         /// </summary>
@@ -3570,31 +3708,105 @@ namespace MapleStoryMacro
         }
 
         /// <summary>
-        /// 執行回程序列：停止腳本 → 冷卻 2000ms → 滑鼠點擊座標 → Enter 確認
+        /// 執行回程序列：停止腳本 → 冷卻 2000ms → 滑鼠點擊座標 → 偵測對話框 → Enter 確認
+        /// ★ 如果啟用對話框偵測，會重複點擊直到偵測到對話框才按 Enter
         /// </summary>
         private void ExecuteReturnToTown(ScheduleTask task)
         {
             try
             {
-                this.BeginInvoke(new Action(() => AddLog($"🏠 開始回程序列：冷卻 2000ms → 點擊({task.ReturnClickX},{task.ReturnClickY}) → Enter")));
+                this.BeginInvoke(new Action(() => AddLog($"🏠 開始回程序列：冷卻 2000ms → 點擊({task.ReturnClickX},{task.ReturnClickY}) → {(task.DialogDetectionEnabled ? "偵測對話框 → " : "")}Enter")));
 
                 // 1. 冷卻延遲 2000ms（確保腳本完全停止）
                 Thread.Sleep(2000);
 
                 bool isBackground = targetWindowHandle != IntPtr.Zero && IsWindow(targetWindowHandle);
 
-                // 2. 滑鼠模擬點擊目標座標
-                if (isBackground)
+                if (!isBackground)
                 {
-                    SendMouseClickToWindow(targetWindowHandle, task.ReturnClickX, task.ReturnClickY);
-                    this.BeginInvoke(new Action(() => AddLog($"🖱️ 已點擊座標 ({task.ReturnClickX}, {task.ReturnClickY})")));
+                    this.BeginInvoke(new Action(() => AddLog("⚠️ 前景模式不支援背景滑鼠點擊，跳過")));
+                    return;
+                }
+
+                // 2. 嘗試點擊並偵測對話框
+                bool dialogFound = false;
+
+                if (task.DialogDetectionEnabled && !string.IsNullOrEmpty(task.DialogTemplatePath) && File.Exists(task.DialogTemplatePath))
+                {
+                    // ★ 對話框偵測模式：點擊 → 截圖比對 → 迴圈直到偵測到或超時
+                    Bitmap? templateBmp = null;
+                    try
+                    {
+                        templateBmp = new Bitmap(task.DialogTemplatePath);
+                    }
+                    catch (Exception ex)
+                    {
+                        this.BeginInvoke(new Action(() => AddLog($"⚠️ 載入模板圖片失敗: {ex.Message}，改用直接點擊模式")));
+                    }
+
+                    if (templateBmp != null)
+                    {
+                        int maxRetries = Math.Max(1, task.DialogDetectionMaxRetries);
+                        double matchThreshold = task.DialogDetectionThreshold;
+
+                        for (int attempt = 1; attempt <= maxRetries && !dialogFound; attempt++)
+                        {
+                            int curAttempt = attempt;
+                            this.BeginInvoke(new Action(() => AddLog($"🔍 第 {curAttempt}/{maxRetries} 次嘗試：點擊 → 偵測對話框...")));
+
+                            // 點擊 NPC
+                            SendMouseClickToWindow(targetWindowHandle, task.ReturnClickX, task.ReturnClickY);
+                            Thread.Sleep(800); // 等待對話框出現
+
+                            // 截取遊戲畫面
+                            using (var screenshot = CaptureGameWindowForDetection())
+                            {
+                                if (screenshot != null)
+                                {
+                                    var (found, score, mx, my) = FindTemplateInImage(screenshot, templateBmp, matchThreshold);
+                                    double scoreRound = Math.Round(score * 100, 1);
+
+                                    if (found)
+                                    {
+                                        dialogFound = true;
+                                        this.BeginInvoke(new Action(() => AddLog($"✅ 對話框偵測成功！匹配度={scoreRound}% 位置=({mx},{my})")));
+                                    }
+                                    else
+                                    {
+                                        this.BeginInvoke(new Action(() => AddLog($"🔍 未偵測到對話框 (最佳匹配={scoreRound}%)，等待重試...")));
+                                        Thread.Sleep(1000); // 等待一秒後重試
+                                    }
+                                }
+                                else
+                                {
+                                    this.BeginInvoke(new Action(() => AddLog($"⚠️ 截圖失敗，等待重試...")));
+                                    Thread.Sleep(500);
+                                }
+                            }
+                        }
+
+                        templateBmp.Dispose();
+
+                        if (!dialogFound)
+                        {
+                            this.BeginInvoke(new Action(() => AddLog($"⚠️ {maxRetries} 次嘗試後仍未偵測到對話框，強制按 Enter")));
+                        }
+                    }
+                    else
+                    {
+                        // 模板載入失敗，退回到直接點擊
+                        SendMouseClickToWindow(targetWindowHandle, task.ReturnClickX, task.ReturnClickY);
+                        this.BeginInvoke(new Action(() => AddLog($"🖱️ 已點擊座標 ({task.ReturnClickX}, {task.ReturnClickY})")));
+                        Thread.Sleep(300);
+                    }
                 }
                 else
                 {
-                    this.BeginInvoke(new Action(() => AddLog("⚠️ 前景模式不支援背景滑鼠點擊，跳過")));
+                    // ★ 直接點擊模式（無對話框偵測）
+                    SendMouseClickToWindow(targetWindowHandle, task.ReturnClickX, task.ReturnClickY);
+                    this.BeginInvoke(new Action(() => AddLog($"🖱️ 已點擊座標 ({task.ReturnClickX}, {task.ReturnClickY})")));
+                    Thread.Sleep(300);
                 }
-
-                Thread.Sleep(300); // 等待遊戲響應點擊
 
                 // 3. 按下 Enter（確認）
                 if (isBackground)
@@ -4452,7 +4664,7 @@ namespace MapleStoryMacro
             {
                 Text = "⏰ 排程管理",
                 Width = 650,
-                Height = 720,
+                Height = 800,
                 StartPosition = FormStartPosition.CenterParent,
                 Owner = this,
                 FormBorderStyle = FormBorderStyle.FixedDialog,
@@ -4674,7 +4886,7 @@ namespace MapleStoryMacro
             };
             Label lblSitDelayUnit = new Label
             {
-                Text = "秒後坐下 | 序列：停止腳本 → 冷卻2s → 點擊(X,Y) → Enter → 坐下",
+                Text = "秒後坐下 | 序列：停止 → 冷卻2s → 點擊(X,Y) → 偵測/Enter → 坐下",
                 Left = 130,
                 Top = 200,
                 Width = 470,
@@ -4703,12 +4915,203 @@ namespace MapleStoryMacro
                 txtSitKey.Tag = args.KeyCode;
             };
 
+            // ===== 對話框偵測設定 =====
+            CheckBox chkDialogDetect = new CheckBox
+            {
+                Text = "🔍 對話框偵測（點擊後截圖比對，偵測到才按 Enter）",
+                Left = 20,
+                Top = 228,
+                Width = 370,
+                ForeColor = Color.FromArgb(180, 180, 255),
+                Font = new Font("microsoft yahei ui", 9F, FontStyle.Bold),
+                Checked = false
+            };
+
+            PictureBox picTemplate = new PictureBox
+            {
+                Left = 400,
+                Top = 225,
+                Width = 80,
+                Height = 50,
+                BorderStyle = BorderStyle.FixedSingle,
+                BackColor = Color.FromArgb(30, 30, 35),
+                SizeMode = PictureBoxSizeMode.Zoom
+            };
+
+            Label lblTemplateStatus = new Label
+            {
+                Text = "(未設定模板)",
+                Left = 490,
+                Top = 228,
+                Width = 120,
+                ForeColor = Color.Gray,
+                Font = new Font("microsoft yahei ui", 8F)
+            };
+
+            Button btnCaptureTemplate = new Button
+            {
+                Text = "📷 擷取模板",
+                Left = 20,
+                Top = 255,
+                Width = 100,
+                Height = 26,
+                BackColor = Color.FromArgb(80, 80, 140),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
+
+            Button btnTestDetect = new Button
+            {
+                Text = "🔍 測試偵測",
+                Left = 125,
+                Top = 255,
+                Width = 100,
+                Height = 26,
+                BackColor = Color.FromArgb(140, 100, 0),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat
+            };
+
+            Label lblRetries = new Label { Text = "重試:", Left = 235, Top = 258, Width = 35, ForeColor = Color.LightGray };
+            NumericUpDown numRetries = new NumericUpDown
+            {
+                Left = 270,
+                Top = 255,
+                Width = 45,
+                Minimum = 1,
+                Maximum = 30,
+                Value = 10,
+                BackColor = Color.FromArgb(60, 60, 65),
+                ForeColor = Color.White
+            };
+            Label lblRetriesUnit = new Label { Text = "次", Left = 318, Top = 258, Width = 20, ForeColor = Color.LightGray };
+
+            Label lblThreshold = new Label { Text = "閾值:", Left = 340, Top = 258, Width = 35, ForeColor = Color.LightGray };
+            NumericUpDown numThreshold = new NumericUpDown
+            {
+                Left = 375,
+                Top = 255,
+                Width = 50,
+                Minimum = 50,
+                Maximum = 99,
+                Value = 85,
+                BackColor = Color.FromArgb(60, 60, 65),
+                ForeColor = Color.White
+            };
+            Label lblThresholdUnit = new Label { Text = "%", Left = 428, Top = 258, Width = 20, ForeColor = Color.LightGray };
+
+            // 對話框模板路徑（暫存）
+            string? dialogTemplatePath = null;
+
+            // 擷取模板按鈕
+            btnCaptureTemplate.Click += (s, args) =>
+            {
+                if (targetWindowHandle == IntPtr.Zero || !IsWindow(targetWindowHandle))
+                {
+                    MessageBox.Show("請先鎖定目標視窗！\n\n步驟：先開啟遊戲 NPC 對話框，再點擊「擷取模板」", "未鎖定", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                using (var screenshot = CaptureGameWindowForDetection())
+                {
+                    if (screenshot == null)
+                    {
+                        MessageBox.Show("無法截取遊戲視窗！", "截取失敗", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+
+                    // 用框選工具讓使用者選擇對話框區域
+                    schedForm.Hide();
+                    var region = RegionSelector.SelectRegion(screenshot);
+                    schedForm.Show();
+
+                    if (region.HasValue && region.Value.Width > 5 && region.Value.Height > 5)
+                    {
+                        // 裁切選取區域
+                        using (var cropped = new Bitmap(region.Value.Width, region.Value.Height, PixelFormat.Format24bppRgb))
+                        {
+                            using (var g = Graphics.FromImage(cropped))
+                            {
+                                g.DrawImage(screenshot, new Rectangle(0, 0, cropped.Width, cropped.Height),
+                                    region.Value, GraphicsUnit.Pixel);
+                            }
+
+                            // 儲存模板
+                            if (!Directory.Exists(DialogTemplateDir))
+                                Directory.CreateDirectory(DialogTemplateDir);
+
+                            string fileName = $"dialog_template_{DateTime.Now:yyyyMMdd_HHmmss}.png";
+                            dialogTemplatePath = Path.Combine(DialogTemplateDir, fileName);
+                            cropped.Save(dialogTemplatePath, ImageFormat.Png);
+
+                            // 更新預覽
+                            picTemplate.Image?.Dispose();
+                            picTemplate.Image = new Bitmap(cropped);
+                            lblTemplateStatus.Text = $"✅ {region.Value.Width}x{region.Value.Height}";
+                            lblTemplateStatus.ForeColor = Color.Lime;
+
+                            AddLog($"📷 對話框模板已儲存: {fileName} ({region.Value.Width}x{region.Value.Height})");
+                        }
+                    }
+                }
+            };
+
+            // 測試偵測按鈕
+            btnTestDetect.Click += (s, args) =>
+            {
+                if (targetWindowHandle == IntPtr.Zero || !IsWindow(targetWindowHandle))
+                {
+                    MessageBox.Show("請先鎖定目標視窗！", "未鎖定", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                if (string.IsNullOrEmpty(dialogTemplatePath) || !File.Exists(dialogTemplatePath))
+                {
+                    MessageBox.Show("請先擷取對話框模板！", "未設定", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                AddLog("🔍 測試偵測中...");
+                double matchThreshold = (double)numThreshold.Value / 100.0;
+
+                Thread detectThread = new Thread(() =>
+                {
+                    try
+                    {
+                        using var templateBmp = new Bitmap(dialogTemplatePath);
+                        using var screenshot = CaptureGameWindowForDetection();
+                        if (screenshot == null)
+                        {
+                            this.BeginInvoke(new Action(() => AddLog("⚠️ 截圖失敗")));
+                            return;
+                        }
+
+                        var (found, score, mx, my) = FindTemplateInImage(screenshot, templateBmp, matchThreshold);
+                        double scoreRound = Math.Round(score * 100, 1);
+
+                        this.BeginInvoke(new Action(() =>
+                        {
+                            if (found)
+                                AddLog($"✅ 偵測成功！匹配度={scoreRound}% 位置=({mx},{my})");
+                            else
+                                AddLog($"❌ 未偵測到 (最佳匹配={scoreRound}%，閾值={numThreshold.Value}%)");
+                        }));
+                    }
+                    catch (Exception ex)
+                    {
+                        this.BeginInvoke(new Action(() => AddLog($"❌ 測試偵測失敗: {ex.Message}")));
+                    }
+                })
+                { IsBackground = true };
+                detectThread.Start();
+            };
+
             // 測試點擊按鈕
             Button btnTestClick = new Button
             {
                 Text = "🧪 測試點擊",
                 Left = 20,
-                Top = 230,
+                Top = 290,
                 Width = 110,
                 Height = 30,
                 BackColor = Color.FromArgb(180, 120, 0),
@@ -4739,7 +5142,7 @@ namespace MapleStoryMacro
             {
                 Text = "➕ 新增排程",
                 Left = 140,
-                Top = 230,
+                Top = 290,
                 Width = 120,
                 Height = 30,
                 BackColor = Color.FromArgb(0, 150, 80),
@@ -4752,7 +5155,7 @@ namespace MapleStoryMacro
             {
                 Text = "📅 排程清單",
                 Left = 20,
-                Top = 270,
+                Top = 330,
                 Width = 200,
                 ForeColor = Color.Yellow,
                 Font = new Font("microsoft yahei ui", 10F, FontStyle.Bold)
@@ -4761,9 +5164,9 @@ namespace MapleStoryMacro
             DataGridView dgv = new DataGridView
             {
                 Left = 20,
-                Top = 295,
+                Top = 355,
                 Width = 590,
-                Height = 220,
+                Height = 200,
                 BackgroundColor = Color.FromArgb(30, 30, 35),
                 ForeColor = Color.White,
                 GridColor = Color.FromArgb(60, 60, 65),
@@ -4856,6 +5259,12 @@ namespace MapleStoryMacro
                     newTask.SitDownKeyCode = (int)sitKey;
                 }
 
+                // 設定對話框偵測
+                newTask.DialogDetectionEnabled = chkDialogDetect.Checked;
+                newTask.DialogTemplatePath = dialogTemplatePath ?? string.Empty;
+                newTask.DialogDetectionMaxRetries = (int)numRetries.Value;
+                newTask.DialogDetectionThreshold = (double)numThreshold.Value / 100.0;
+
                 scheduleTasks.Add(newTask);
                 schedulerTimer.Start();
                 refreshTaskList();
@@ -4870,7 +5279,7 @@ namespace MapleStoryMacro
             {
                 Text = "🗑️ 刪除選中",
                 Left = 20,
-                Top = 525,
+                Top = 565,
                 Width = 110,
                 Height = 30,
                 BackColor = Color.FromArgb(150, 60, 60),
@@ -4882,7 +5291,7 @@ namespace MapleStoryMacro
             {
                 Text = "清空全部",
                 Left = 140,
-                Top = 525,
+                Top = 565,
                 Width = 90,
                 Height = 30,
                 BackColor = Color.FromArgb(120, 80, 40),
@@ -4894,7 +5303,7 @@ namespace MapleStoryMacro
             {
                 Text = "關閉",
                 Left = 530,
-                Top = 525,
+                Top = 565,
                 Width = 80,
                 Height = 30,
                 BackColor = Color.FromArgb(80, 80, 85),
@@ -4931,7 +5340,7 @@ namespace MapleStoryMacro
             Label lblCountdown = new Label
             {
                 Left = 240,
-                Top = 530,
+                Top = 570,
                 Width = 280,
                 ForeColor = Color.Yellow,
                 Font = new Font("microsoft yahei ui", 9F)
@@ -4979,6 +5388,8 @@ namespace MapleStoryMacro
                 lblLoop, numLoop, lblLoopHint,
                 chkReturnToTown, lblClickX, numClickX, lblClickY, numClickY, lblSitKey, txtSitKey,
                 lblSitDelay, numSitDelay, lblSitDelayUnit,
+                chkDialogDetect, picTemplate, lblTemplateStatus, btnCaptureTemplate, btnTestDetect,
+                lblRetries, numRetries, lblRetriesUnit, lblThreshold, numThreshold, lblThresholdUnit,
                 btnTestClick, btnAddTask,
                 lblListTitle, dgv,
                 btnRemove, btnClearAll, btnClose, lblCountdown
