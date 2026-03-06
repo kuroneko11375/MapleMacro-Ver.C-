@@ -98,6 +98,36 @@ namespace MapleStoryMacro
         public int BoundsTolerance { get; set; } = 5;
         #endregion
 
+        #region 位置連續性追蹤（防止誤認 NPC/怪物）
+        /// <summary>上一次偵測到的像素位置（用於連續性判斷）</summary>
+        private Point? _lastKnownPixelPos = null;
+
+        /// <summary>連續偵測失敗次數</summary>
+        private int _consecutiveMissCount = 0;
+
+        /// <summary>位置連續性：最大允許跳動距離(px)，超過此距離的聚類將被降權</summary>
+        public int MaxPositionJumpPixels { get; set; } = 20;
+
+        /// <summary>最小圖標緊湊度 (像素數 / 邊界框面積, 0~1)，過低代表形狀不規則</summary>
+        public float MinCompactness { get; set; } = 0.15f;
+
+        /// <summary>連續偵測失敗幾次後清除位置記憶（允許重新搜尋）</summary>
+        public int MaxConsecutiveMissBeforeReset { get; set; } = 10;
+
+        /// <summary>清除位置記憶（停止播放或換地圖時呼叫）</summary>
+        public void ResetPositionMemory()
+        {
+            _lastKnownPixelPos = null;
+            _consecutiveMissCount = 0;
+        }
+
+        /// <summary>最後一次偵測的聚類數量（含所有大小，供除錯顯示）</summary>
+        public int LastTotalClusterCount { get; private set; }
+
+        /// <summary>最後一次偵測通過過濾的有效聚類數量</summary>
+        public int LastValidClusterCount { get; private set; }
+        #endregion
+
         /// <summary>
         /// 附加到目標視窗
         /// </summary>
@@ -114,6 +144,16 @@ namespace MapleStoryMacro
         public void Detach()
         {
             TargetWindow = IntPtr.Zero;
+        }
+
+        /// <summary>
+        /// 取得目標視窗的客戶區尺寸（像素）
+        /// </summary>
+        public (int width, int height) GetClientAreaSize()
+        {
+            if (TargetWindow == IntPtr.Zero) return (0, 0);
+            GetClientRect(TargetWindow, out RECT r);
+            return (r.Right - r.Left, r.Bottom - r.Top);
         }
 
         /// <summary>
@@ -219,6 +259,7 @@ namespace MapleStoryMacro
 
         /// <summary>
         /// 從圖片中偵測角色位置
+        /// ★ 使用多因素評分系統：大小、緊湊度、位置連續性、邊界範圍
         /// </summary>
         public (Point pixelPos, bool success, int confidence) DetectPositionFromBitmap(Bitmap bmp)
         {
@@ -226,40 +267,145 @@ namespace MapleStoryMacro
 
             if (yellowPixels.Count < MinIconPixels)
             {
+                _consecutiveMissCount++;
+                if (_consecutiveMissCount >= MaxConsecutiveMissBeforeReset)
+                    _lastKnownPixelPos = null;
                 return (Point.Empty, false, 0);
             }
 
             // 聚類分析找出獨立圖標
             var clusters = ClusterPixels(yellowPixels);
+            LastTotalClusterCount = clusters.Count;
 
             if (clusters.Count == 0)
             {
+                LastValidClusterCount = 0;
+                _consecutiveMissCount++;
+                if (_consecutiveMissCount >= MaxConsecutiveMissBeforeReset)
+                    _lastKnownPixelPos = null;
                 return (Point.Empty, false, 0);
             }
 
-            // 選擇最大的聚類（通常是角色圖標）
-            var largestCluster = clusters.OrderByDescending(c => c.Count).First();
-
-            // 過濾過大的聚類（可能是地圖裝飾）
-            if (largestCluster.Count > MaxIconPixels)
+            // ★ 過濾：大小範圍 + 緊湊度
+            var validClusters = new List<(List<Point> cluster, float compactness, Point center, int bboxW, int bboxH)>();
+            foreach (var cluster in clusters)
             {
-                // 嘗試選擇次大的
-                var validClusters = clusters.Where(c => c.Count >= MinIconPixels && c.Count <= MaxIconPixels).ToList();
-                if (validClusters.Count == 0)
-                {
-                    return (Point.Empty, false, 10);
-                }
-                largestCluster = validClusters.OrderByDescending(c => c.Count).First();
+                if (cluster.Count < MinIconPixels || cluster.Count > MaxIconPixels)
+                    continue;
+
+                int cMinX = cluster.Min(p => p.X), cMaxX = cluster.Max(p => p.X);
+                int cMinY = cluster.Min(p => p.Y), cMaxY = cluster.Max(p => p.Y);
+                int bboxW = cMaxX - cMinX + 1;
+                int bboxH = cMaxY - cMinY + 1;
+                float bboxArea = bboxW * bboxH;
+                float compactness = bboxArea > 0 ? cluster.Count / bboxArea : 0;
+
+                // 緊湊度過濾：形狀太不規則的排除（NPC 圖標通常比較大且不規則）
+                if (compactness < MinCompactness)
+                    continue;
+
+                int cx = (int)cluster.Average(p => p.X);
+                int cy = (int)cluster.Average(p => p.Y);
+                validClusters.Add((cluster, compactness, new Point(cx, cy), bboxW, bboxH));
             }
 
-            // 計算中心點
-            int centerX = (int)largestCluster.Average(p => p.X);
-            int centerY = (int)largestCluster.Average(p => p.Y);
+            if (validClusters.Count == 0)
+            {
+                LastValidClusterCount = 0;
+                _consecutiveMissCount++;
+                if (_consecutiveMissCount >= MaxConsecutiveMissBeforeReset)
+                    _lastKnownPixelPos = null;
+                return (Point.Empty, false, 10);
+            }
+
+            LastValidClusterCount = validClusters.Count;
+
+            // ★ 多因素評分選擇最佳聚類
+            var bestCluster = SelectBestCluster(validClusters);
+
+            // 更新位置記憶
+            _lastKnownPixelPos = bestCluster.center;
+            _consecutiveMissCount = 0;
 
             // 計算信心度
-            int confidence = CalculateConfidence(largestCluster, clusters);
+            int confidence = CalculateConfidence(bestCluster.cluster, clusters);
 
-            return (new Point(centerX, centerY), true, confidence);
+            return (bestCluster.center, true, confidence);
+        }
+
+        /// <summary>
+        /// ★ 多因素評分選擇最佳聚類
+        /// 評分因素：位置連續性 > 邊界範圍 > 緊湊度 > 大小適中
+        /// </summary>
+        private (List<Point> cluster, float compactness, Point center, int bboxW, int bboxH)
+            SelectBestCluster(List<(List<Point> cluster, float compactness, Point center, int bboxW, int bboxH)> candidates)
+        {
+            if (candidates.Count == 1)
+                return candidates[0];
+
+            double bestScore = double.MinValue;
+            int bestIdx = 0;
+
+            // 找出最大像素數用於歸一化
+            int maxPixels = candidates.Max(c => c.cluster.Count);
+
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                var c = candidates[i];
+                double score = 0;
+
+                // 1. 位置連續性（權重最高）：離上次位置越近分數越高
+                if (_lastKnownPixelPos.HasValue)
+                {
+                    double dist = Math.Sqrt(
+                        Math.Pow(c.center.X - _lastKnownPixelPos.Value.X, 2) +
+                        Math.Pow(c.center.Y - _lastKnownPixelPos.Value.Y, 2));
+
+                    if (dist <= MaxPositionJumpPixels)
+                        score += 50.0;  // 在合理跳動範圍內：大加分
+                    else if (dist <= MaxPositionJumpPixels * 2)
+                        score += 25.0;  // 稍遠但仍可能
+                    else
+                        score -= 20.0;  // 太遠：大幅降權（可能是 NPC）
+                }
+
+                // 2. 邊界範圍內加分
+                if (MapBounds.Width > 0 && MapBounds.Height > 0)
+                {
+                    bool inBounds = c.center.X >= (MapBounds.Left - BoundsTolerance) &&
+                                    c.center.X <= (MapBounds.Left + MapBounds.Width + BoundsTolerance) &&
+                                    c.center.Y >= (MapBounds.Top - BoundsTolerance) &&
+                                    c.center.Y <= (MapBounds.Top + MapBounds.Height + BoundsTolerance);
+                    if (inBounds)
+                        score += 15.0;
+                    else
+                        score -= 10.0;
+                }
+
+                // 3. 緊湊度加分（角色圖標通常是緊湊的小點）
+                score += c.compactness * 20.0;
+
+                // 4. 大小適中加分（角色圖標通常 5~25 像素）
+                int pixelCount = c.cluster.Count;
+                if (pixelCount >= 5 && pixelCount <= 25)
+                    score += 10.0;
+                else if (pixelCount >= MinIconPixels && pixelCount <= 40)
+                    score += 5.0;
+
+                // 5. 邊界框大小合理（角色圖標通常 ≤ 8x8）
+                if (c.bboxW <= 8 && c.bboxH <= 8)
+                    score += 8.0;
+                else if (c.bboxW <= 12 && c.bboxH <= 12)
+                    score += 3.0;
+
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    bestIdx = i;
+                }
+            }
+
+            return candidates[bestIdx];
         }
 
         /// <summary>
@@ -500,10 +646,10 @@ namespace MapleStoryMacro
         /// </summary>
         private int CalculateConfidence(List<Point> mainCluster, List<List<Point>> allClusters)
         {
-            int confidence = 50; // 基礎分
+            int confidence = 40; // 基礎分
 
             // 圖標大小合理 (+20)
-            if (mainCluster.Count >= 8 && mainCluster.Count <= 30)
+            if (mainCluster.Count >= 5 && mainCluster.Count <= 25)
                 confidence += 20;
             else if (mainCluster.Count >= MinIconPixels && mainCluster.Count <= MaxIconPixels)
                 confidence += 10;
@@ -513,14 +659,31 @@ namespace MapleStoryMacro
                 confidence += 20;
             else if (allClusters.Count <= 3)
                 confidence += 10;
+            // 多個聚類 = 干擾較多，信心較低
+            else
+                confidence -= 5;
 
             // 聚類形狀緊湊 (+10)
             int width = mainCluster.Max(p => p.X) - mainCluster.Min(p => p.X);
             int height = mainCluster.Max(p => p.Y) - mainCluster.Min(p => p.Y);
-            if (width <= 8 && height <= 8)
+            if (width <= 6 && height <= 6)
+                confidence += 15;
+            else if (width <= 8 && height <= 8)
                 confidence += 10;
 
-            return Math.Min(100, confidence);
+            // 位置連續性加分 (+10)
+            if (_lastKnownPixelPos.HasValue)
+            {
+                int cx = (int)mainCluster.Average(p => p.X);
+                int cy = (int)mainCluster.Average(p => p.Y);
+                double dist = Math.Sqrt(
+                    Math.Pow(cx - _lastKnownPixelPos.Value.X, 2) +
+                    Math.Pow(cy - _lastKnownPixelPos.Value.Y, 2));
+                if (dist <= MaxPositionJumpPixels)
+                    confidence += 10;
+            }
+
+            return Math.Clamp(confidence, 0, 100);
         }
         #endregion
 
@@ -599,6 +762,8 @@ namespace MapleStoryMacro
                 HueMax = HueRange.Max,
                 MinSaturation = MinSaturation,
                 MinValue = MinValue,
+                MaxPositionJumpPixels = MaxPositionJumpPixels,
+                MinCompactness = MinCompactness,
                 SavedAt = DateTime.Now
             };
 
@@ -628,6 +793,11 @@ namespace MapleStoryMacro
                     HueRange = (data.HueMin, data.HueMax);
                     MinSaturation = data.MinSaturation;
                     MinValue = data.MinValue;
+                    // ★ 新參數（向後相容：舊檔案預設為 0，用預設值代替）
+                    if (data.MaxPositionJumpPixels > 0)
+                        MaxPositionJumpPixels = data.MaxPositionJumpPixels;
+                    if (data.MinCompactness > 0)
+                        MinCompactness = data.MinCompactness;
                     return true;
                 }
             }
@@ -650,13 +820,16 @@ namespace MapleStoryMacro
             public float HueMax { get; set; }
             public float MinSaturation { get; set; }
             public float MinValue { get; set; }
+            public int MaxPositionJumpPixels { get; set; }
+            public float MinCompactness { get; set; }
             public DateTime SavedAt { get; set; }
         }
         #endregion
 
         #region 除錯工具
         /// <summary>
-        /// 產生除錯圖片，標記偵測到的黃色像素
+        /// 產生除錯圖片，標記偵測到的黃色像素和聚類
+        /// ★ 不同聚類用不同顏色標記，被選中的用紅色，被淘汰的用灰色
         /// </summary>
         public Bitmap? CreateDebugImage()
         {
@@ -666,13 +839,24 @@ namespace MapleStoryMacro
 
                 var debugBmp = new Bitmap(bmp);
                 var yellowPixels = FindYellowPixels(bmp);
+                var clusters = ClusterPixels(yellowPixels);
 
-                // 標記黃色像素為紅色
-                foreach (var p in yellowPixels)
+                // 聚類顏色列表（被淘汰的聚類用不同顏色區分）
+                Color[] clusterColors = { Color.Orange, Color.Magenta, Color.Yellow, Color.Lime, Color.Aqua };
+
+                // 標記所有聚類
+                for (int ci = 0; ci < clusters.Count; ci++)
                 {
-                    if (p.X >= 0 && p.X < debugBmp.Width && p.Y >= 0 && p.Y < debugBmp.Height)
+                    var cluster = clusters[ci];
+                    Color clrMark = clusterColors[ci % clusterColors.Length];
+                    // 過小或過大的聚類用深灰色表示被淘汰
+                    if (cluster.Count < MinIconPixels || cluster.Count > MaxIconPixels)
+                        clrMark = Color.FromArgb(80, 80, 80);
+
+                    foreach (var p in cluster)
                     {
-                        debugBmp.SetPixel(p.X, p.Y, Color.Red);
+                        if (p.X >= 0 && p.X < debugBmp.Width && p.Y >= 0 && p.Y < debugBmp.Height)
+                            debugBmp.SetPixel(p.X, p.Y, clrMark);
                     }
                 }
 

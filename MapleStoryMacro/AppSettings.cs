@@ -143,6 +143,17 @@ namespace MapleStoryMacro
         public string ReturnCommand { get; set; } = "@FM";
 
         /// <summary>
+        /// 前置按鍵（點擊前先按一次，例如 ESC 關閉選單，Keys.None 表示不按）
+        /// </summary>
+        public int ReturnPreKeyCode { get; set; } = (int)Keys.None;
+
+        /// <summary>
+        /// 確認按鍵（點擊/偵測後按一次確認，Keys.None 表示不按）
+        /// 預設為 Enter
+        /// </summary>
+        public int ReturnConfirmKeyCode { get; set; } = (int)Keys.Enter;
+
+        /// <summary>
         /// 坐下按鍵（回程後自動觸發）
         /// </summary>
         public int SitDownKeyCode { get; set; } = (int)Keys.None;

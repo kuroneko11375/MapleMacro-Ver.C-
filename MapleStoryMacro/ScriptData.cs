@@ -69,5 +69,11 @@ namespace MapleStoryMacro
 
         /// <summary>錄製時的小地圖 Y 座標（-1 = 未記錄）</summary>
         public int RecordedY { get; set; } = -1;
+
+        /// <summary>
+        /// ★ 技能硬直時間（毫秒）：按鍵發送後鎖定位置修正器此時長。
+        /// 0 = 不鎖定。在腳本編輯器中可為長硬直技能設定此值。
+        /// </summary>
+        public int SkillAnimationDelay { get; set; } = 0;
     }
 }
