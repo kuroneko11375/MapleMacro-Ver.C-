@@ -1294,18 +1294,31 @@ namespace MapleStoryMacro
             // ── 方向診斷事件 ──
             Action<string, Func<WinKeys[]>> doDiag = (dir, getKeys) =>
             {
-                if (minimapTracker == null || !minimapTracker.IsCalibrated) { lblDiag.Text = "❌ 請先校準小地圖"; return; }
+                if (minimapTracker == null || !minimapTracker.IsCalibrated) { lblDiag.Text = "❌ 請先校準小地圖"; lblDiag.Foreground = _B(255, 0, 0); return; }
                 lblDiag.Text = $"測試 {dir} 中..."; lblDiag.Foreground = _B(255, 255, 0);
                 var c = makeCorrector();
+                var keys = getKeys();
                 System.Threading.Tasks.Task.Run(() =>
                 {
-                    var r = c.DiagnoseDirection(minimapTracker, dir, getKeys());
-                    Dispatcher.BeginInvoke(new Action(() =>
+                    try
                     {
-                        lblDiag.Text = r.ToString();
-                        lblDiag.Foreground = r.Error != null ? _B(255, 0, 0) : _B(0, 255, 0);
-                        appendLog(r.ToString());
-                    }));
+                        var r = c.DiagnoseDirection(minimapTracker, dir, keys);
+                        Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            lblDiag.Text = r.ToString();
+                            lblDiag.Foreground = r.Error != null ? _B(255, 0, 0) : _B(0, 255, 0);
+                            appendLog(r.ToString());
+                        }));
+                    }
+                    catch (Exception ex)
+                    {
+                        Dispatcher.BeginInvoke(new Action(() =>
+                        {
+                            lblDiag.Text = $"❌ {ex.Message}";
+                            lblDiag.Foreground = _B(255, 0, 0);
+                            appendLog($"❌ 診斷失敗: {ex.Message}");
+                        }));
+                    }
                 });
             };
             bDL.Click += (s, e) => doDiag("←左", () => tL.Tag as WinKeys[] ?? new[] { WinKeys.Left });
@@ -1621,7 +1634,7 @@ namespace MapleStoryMacro
                 txtKey.Tag = (WinKeys?)action.KeyCode;
                 txtKey.Cursor = System.Windows.Input.Cursors.Arrow;
                 var keyCapturing = false;
-                txtKey.MouseDown += (ts, te) => { txtKey.Text = "按下新按鍵..."; txtKey.Foreground = WMedia.Brushes.Yellow; keyCapturing = true; };
+                txtKey.PreviewMouseLeftButtonDown += (ts, te) => { te.Handled = true; txtKey.Text = "按下新按鍵..."; txtKey.Foreground = WMedia.Brushes.Yellow; keyCapturing = true; };
                 ew.PreviewKeyDown += (ts, te) =>
                 {
                     if (!keyCapturing) return;
@@ -1729,7 +1742,7 @@ namespace MapleStoryMacro
                 txtIKey.Foreground = WMedia.Brushes.Yellow;
                 txtIKey.Tag = (WinKeys?)null;
                 var iCapture = false;
-                txtIKey.MouseDown += (ts, te) => { txtIKey.Text = "按下按鍵..."; txtIKey.Foreground = WMedia.Brushes.Yellow; iCapture = true; };
+                txtIKey.PreviewMouseLeftButtonDown += (ts, te) => { te.Handled = true; txtIKey.Text = "按下按鍵..."; txtIKey.Foreground = WMedia.Brushes.Yellow; iCapture = true; };
                 iw.PreviewKeyDown += (ts, te) =>
                 {
                     if (!iCapture) return;
